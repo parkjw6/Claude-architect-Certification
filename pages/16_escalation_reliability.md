@@ -248,3 +248,135 @@ report_section = """
 ---
 
 > 🔗 다음 챕터: [시나리오 1 — 고객 지원 에이전트](17_scenario1_customer_support.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Codex approvals와 Agents SDK human-in-the-loop
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | sandbox, Rules, approval로 coding command의 권한 상승을 통제합니다. |
+| **Codex app** | 승인 요청과 agent 진행 상황을 UI에서 검토하지만 권한 모델은 CLI와 공유합니다. |
+| **Codex SDK** | Codex coding thread의 sandbox를 thread/turn별로 programmatically 지정합니다. |
+| **OpenAI Agents SDK** | business action의 human-in-the-loop, handoff, escalation을 구현하는 primary 계층입니다. |
+
+### 1. 두 종류의 escalation을 구분한다
+
+```text
+Coding agent가 sandbox 밖 행동을 요청
+→ Codex approval / Rules / Sandbox
+
+서비스 agent가 환불·법률·개인정보 결정을 사람에게 넘김
+→ Agents SDK HITL + application workflow
+```
+
+둘 다 “사람 승인”이지만 상태와 책임 계층이 다릅니다.
+
+### 2. Agents SDK의 approval flow
+
+민감 tool은 approval 필요로 정의할 수 있습니다.
+
+```python
+from agents import Agent, Runner
+from agents.decorators import tool
+
+
+@tool(needs_approval=True)
+async def issue_refund(
+    order_id: str,
+    amount: float,
+) -> str:
+    return f"Refund issued for {order_id}: {amount}"
+
+
+agent = Agent(
+    name="support_agent",
+    instructions="Resolve support requests using policy.",
+    tools=[issue_refund],
+)
+
+result = await Runner.run(
+    agent,
+    "Refund order ORD-123 for 650 USD.",
+)
+
+if result.interruptions:
+    state = result.to_state()
+
+    for interruption in result.interruptions:
+        # 실제 서비스에서는 UI/queue/approval service에서 결정
+        state.reject(interruption)
+
+    result = await Runner.run(agent, state)
+```
+
+실제 승인은 사용자 입력, 관리 UI, ticket system 등의 authoritative channel에서 받아야 합니다.
+
+### 3. Codex의 권한 계층
+
+```text
+Sandbox
+→ 실제 기본 capability
+
+Rules
+→ command prefix의 allow/prompt/forbidden
+
+PermissionRequest Hook
+→ 승인 요청 시 custom 정책
+
+PreToolUse Hook
+→ 실행 직전 block/rewrite/context 추가
+```
+
+Hook만으로 모든 보안을 구현하지 않습니다. Hosted tool 일부는 local Hook 경로에 포함되지 않을 수 있고, 외부 시스템 권한은 해당 시스템에서 다시 검증해야 합니다.
+
+### 4. Confidence 대신 objective trigger
+
+```python
+def escalation_reason(case: dict) -> str | None:
+    if case["user_requested_human"]:
+        return "explicit_human_request"
+
+    if case["policy_match"] is None:
+        return "policy_gap"
+
+    if case["attempt_count"] >= 3 and not case["progress"]:
+        return "no_progress"
+
+    if case["refund_amount"] > 500:
+        return "approval_threshold"
+
+    return None
+```
+
+모델이 스스로 말한 confidence는 보조 신호일 수 있지만 단독 gate로 사용하지 않습니다.
+
+### 5. Escalation 시 handoff payload
+
+사람이 전체 transcript에 접근하지 못한다고 가정하고 다음을 포함합니다.
+
+- identity와 verification 상태
+- 관련 resource ID
+- 정확한 금액·통화·기한
+- 적용한 policy version
+- 이미 시도한 작업과 결과
+- escalation trigger
+- 아직 실행되지 않은 side effect
+
+
+### 공식 문서
+
+- [Agents SDK human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

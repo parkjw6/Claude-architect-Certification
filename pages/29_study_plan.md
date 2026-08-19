@@ -202,3 +202,289 @@ D5                       ██
 ---
 
 > 🔗 다음 챕터: [시험 당일 전략](30_exam_strategy.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Claude 학습과 병행하는 Codex 실습 로드맵
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | 학습 계획의 기본 트랙입니다. |
+| **Codex app** | CLI 원리를 익힌 뒤 parallel project/thread, worktree, Skill UI, Automations를 실습합니다. |
+| **Codex SDK** | TypeScript/Python으로 start/run/resume와 sandbox를 실습합니다. |
+| **OpenAI Agents SDK** | Agent/Runner/tools/handoff/HITL capstone을 구현합니다. |
+
+기존 12주 Claude 시험 계획을 유지하면서, Codex 사용자에게 필요한 실습을 병행할 수 있습니다.
+
+### 1. 8주 Codex 병행 트랙 — CLI를 기본으로, app·SDK·Agents SDK를 단계적으로 추가
+
+#### Week 1 — 제품 계층과 AGENTS
+
+목표:
+
+- Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK 구분
+- Responses API·Batch API는 별도 API 기능으로 구분
+- root와 nested `AGENTS.md`
+- 변경 범위와 완료 조건 작성
+
+실습:
+
+```text
+repo root AGENTS.md 작성
+backend/AGENTS.md 작성
+동일 작업을 root와 backend에서 실행해 적용 지침 비교
+```
+
+산출물:
+
+```text
+AGENTS.md
+backend/AGENTS.md
+docs/codex-instruction-map.md
+```
+
+#### Week 2 — Skills
+
+목표:
+
+- team review Skill
+- Skill reference와 script 분리
+- explicit/implicit invocation 이해
+
+실습 구조:
+
+```text
+.agents/skills/team-review/
+├── SKILL.md
+├── references/checklist.md
+└── scripts/changed_files.py
+```
+
+검증:
+
+```text
+$team-review 명시 호출
+일반 "변경사항 리뷰"에서 자동 선택 여부
+출력 format 일관성
+```
+
+#### Week 3 — Subagents와 context isolation
+
+목표:
+
+- explorer와 reviewer custom agent
+- read-only sandbox
+- 병렬 bounded task
+
+실습:
+
+```toml
+[agents]
+max_concurrent_threads_per_session = 4
+```
+
+한 기능을 explorer, test reviewer, security reviewer가 각각 분석하게 하고 main 결과의 중복과 context 양을 비교합니다.
+
+#### Week 4 — MCP와 권한
+
+목표:
+
+- project/user config
+- environment secret
+- enabled/disabled tool
+- approval mode
+
+실습:
+
+```text
+read-only docs MCP
+read-only GitHub MCP
+개인 token은 환경 변수
+write tool은 disabled
+```
+
+#### Week 5 — Hooks, Rules, Sandbox
+
+목표:
+
+- PreToolUse
+- command policy
+- read-only/workspace-write
+- guardrail과 security boundary 차이
+
+실습:
+
+```text
+rm -rf 차단 Hook
+git push prompt Rule
+reviewer read-only
+coding workspace-write
+```
+
+#### Week 6 — Automation
+
+목표:
+
+- `codex exec`
+- JSONL events
+- final schema
+- GitHub Action
+
+실습:
+
+```bash
+codex exec --json ...
+codex exec --output-schema ...
+codex review --base main
+```
+
+CI에서 API key가 job 전체에 노출되지 않도록 설계합니다.
+
+#### Week 7 — Responses API
+
+목표:
+
+- Structured Outputs
+- Function Calling 구분
+- semantic validation
+- Batch API
+
+실습:
+
+```text
+invoice extraction
+nullable fields
+source evidence
+validation feedback retry
+100건 Batch
+```
+
+#### Week 8 — Agents SDK
+
+목표:
+
+- Agent/Runner
+- Agent.as_tool
+- fixed parallel orchestration
+- HITL
+
+실습:
+
+```text
+support agent
+programmatic refund gate
+approval interruption
+structured handoff
+```
+
+### 2. 매주 공통 검증
+
+```text
+1. 공식 문서와 syntax 재확인
+2. minimal working example 실행
+3. 실패 사례 한 개 만들기
+4. guardrail이 실제로 막는지 검증
+5. artifact와 decision 기록
+6. 다음 주 회귀 fixture로 보존
+```
+
+### 3. 최종 capstone
+
+```text
+Repository:
+- AGENTS.md
+- two Skills
+- explorer/reviewer agents
+- read-only MCP
+- Hook and Rules
+- CI codex review
+
+Application:
+- Structured extraction endpoint
+- semantic validator
+- Batch job
+- Agents SDK coordinator
+- HITL approval
+```
+
+최종 문서에는 “Claude 시험 정답”과 “Codex 구현”을 별도 열로 정리합니다.
+
+
+
+### Codex app 별도 실습
+
+CLI 기본기를 익힌 뒤 하루 정도 app-only 기능을 검증합니다.
+
+```text
+1. 같은 repository를 app에서 열기
+2. CLI configuration과 session history 연계 확인
+3. 두 agent를 별도 thread로 실행
+4. built-in worktree에서 서로 다른 해결책 생성
+5. 각 diff를 review하고 하나를 editor로 열기
+6. team Skill을 UI에서 선택·관리
+7. 반복 issue triage Automation 생성
+8. 결과가 review queue에 들어오는지 확인
+```
+
+### Codex SDK 별도 실습
+
+#### TypeScript
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+
+const codex = new Codex();
+const thread = codex.startThread();
+
+const first = await thread.run("Explore this repository");
+const second = await thread.run("Propose the smallest safe change");
+
+console.log(first.finalResponse);
+console.log(second.finalResponse);
+```
+
+#### Python
+
+```python
+from openai_codex import Codex, Sandbox
+
+with Codex() as codex:
+    thread = codex.thread_start(
+        sandbox=Sandbox.read_only,
+    )
+    result = thread.run("Review the current branch")
+    print(result.final_response)
+```
+
+학습 완료 기준:
+
+- CLI shell automation과 SDK embedding을 구분
+- thread ID를 저장하고 resume 가능
+- read-only와 workspace-write를 turn별로 구분
+- 여러 coding thread를 application code에서 병렬 실행
+- Agents SDK가 필요한 broader workflow를 판별
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+<!-- CODEX-ADDENDUM-END -->

@@ -233,3 +233,153 @@ def handle_conflicting_data(source_a: dict, source_b: dict) -> dict:
 ---
 
 > 🔗 다음 챕터: [샘플 문제 해설 Q9~Q12](25_sample_q9_12.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Q5~Q8의 Codex/OpenAI 대응
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | Q5 context 작업과 Q7 MCP 설정의 Codex 기본 대응입니다. |
+| **Codex app** | thread/project UI로 context를 관리하지만 MCP 설정 의미는 CLI와 같습니다. |
+| **Codex SDK** | thread resume와 programmatic MCP-enabled coding workflow에 대응합니다. |
+| **OpenAI Agents SDK** | agent loop, session, business state, source conflict를 production workflow에서 다룹니다. |
+
+### Q5. 요약에서 주문 번호와 금액 보존
+
+원칙은 동일하지만 production에서는 prompt만 개선하는 데서 끝내지 않습니다.
+
+```python
+from pydantic import BaseModel
+
+
+class RefundItem(BaseModel):
+    order_id: str
+    amount: float
+    currency: str
+
+
+class SupportState(BaseModel):
+    customer_id: str
+    refunds: list[RefundItem]
+    deadline: str | None
+```
+
+```text
+conversation summary
+= 읽기 쉬운 설명
+
+SupportState
+= 검증 가능한 authoritative snapshot
+```
+
+Codex의 `/compact`도 작업 conversation을 줄이는 기능이지 business state database가 아닙니다.
+
+### Q6. Agent loop 종료
+
+Claude 시험에서는 `stop_reason == "end_turn"`이 제품별 정답입니다. OpenAI에서는 사용하는 계층에 따라 loop 소유자가 달라집니다.
+
+| OpenAI 계층 | Loop 제어 |
+|---|---|
+| Codex CLI | Codex runtime이 관리 |
+| Agents SDK | `Runner`가 turn/tool loop 관리 |
+| Responses API 직접 구현 | application이 function-call output을 처리하고 다음 request 생성 |
+| Responses Multi-agent | root response runtime이 subagent orchestration 관리 |
+
+따라서 OpenAI 코드에서 Anthropic의 `stop_reason` field를 그대로 찾지 않습니다.
+
+Raw Responses API를 직접 사용한다면 다음 원칙을 지킵니다.
+
+```text
+response output에서 function call 확인
+→ tool 실행
+→ tool output을 다음 request에 전달
+→ final output일 때 종료
+```
+
+여기에 `max_turns`, deadline, cancellation, cost budget을 안전망으로 둡니다. 모델 신호만 또는 고정 횟수만 단독 종료 조건으로 쓰지 않습니다.
+
+### Q7. 팀 공유 MCP
+
+Claude:
+
+```text
+project: .mcp.json
+user: ~/.claude.json
+```
+
+Codex:
+
+```text
+project: .codex/config.toml
+user: ~/.codex/config.toml
+```
+
+```toml
+[mcp_servers.github]
+command = "github-mcp-server"
+env_vars = ["GITHUB_TOKEN"]
+required = true
+
+enabled_tools = [
+  "search_code",
+  "get_file_contents",
+]
+
+default_tools_approval_mode = "prompt"
+```
+
+Secret 값은 repository에 넣지 않고 환경 변수 이름만 공유합니다. Project `.codex/config.toml`은 trusted project에서 로드됩니다.
+
+### Q8. 상충 정보
+
+원칙은 동일합니다.
+
+```python
+from pydantic import BaseModel
+
+
+class SourcedValue(BaseModel):
+    value: str
+    source_id: str
+    published_at: str | None
+    retrieved_at: str
+    evidence: str
+
+
+class FieldConflict(BaseModel):
+    field: str
+    candidates: list[SourcedValue]
+    resolution_status: str = "unresolved"
+```
+
+다음은 자동으로 하지 않습니다.
+
+```text
+첫 번째 source 선택
+최신 source 무조건 선택
+평균값 계산
+source 없는 단일 값으로 축약
+```
+
+Source-priority policy가 공식적으로 존재할 때만 code로 해결하고 policy version을 기록합니다.
+
+
+### 공식 문서
+
+- [Codex slash commands](https://developers.openai.com/codex/cli/slash-commands)
+- [Responses API compaction](https://developers.openai.com/api/docs/guides/compaction)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+<!-- CODEX-ADDENDUM-END -->

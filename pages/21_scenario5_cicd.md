@@ -351,3 +351,363 @@ B) 매주 일요일 밤 전체 코드베이스 품질 분석 (다음 날 아침 
 ---
 
 > 🔗 다음 챕터: [시나리오 6 — 데이터 추출 파이프라인](22_scenario6_data_extraction.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: `codex exec`, schema 출력, GitHub Action
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | 단순하고 shell-native한 CI에는 `codex exec`가 기본입니다. |
+| **Codex app** | Automations로 scheduled desktop work와 review queue를 제공하지만 deterministic CI gate의 대체물로 보지 않습니다. |
+| **Codex SDK** | thread resume, result object, 여러 coding turn이 필요한 CI/internal automation에 적합합니다. |
+| **OpenAI Agents SDK** | CI 분석이 broader release-management agent workflow의 일부일 때 사용합니다. |
+
+> **별도 OpenAI API 계층:** 대량 비차단 job에는 Batch API가 별도입니다.
+
+### 1. Claude `-p`의 Codex 대응
+
+```text
+claude -p
+→ codex exec
+```
+
+기본 분석:
+
+```bash
+codex exec \
+  "Review the current checkout for release blockers"
+```
+
+Codex `exec`는 진행 정보를 stderr에, 최종 메시지를 stdout에 출력하는 비대화형 실행 경로입니다.
+
+### 2. Sandbox를 최소 권한으로 선택
+
+분석만:
+
+```bash
+codex exec \
+  --sandbox read-only \
+  "Review the current diff"
+```
+
+파일 수정:
+
+```bash
+codex exec \
+  --sandbox workspace-write \
+  "Fix the failing tests and run the relevant suite"
+```
+
+`danger-full-access`는 filesystem과 network 경계를 제거하므로 통제된 disposable environment가 아니면 사용하지 않습니다.
+
+### 3. `--json`과 `--output-schema`
+
+전체 event stream:
+
+```bash
+codex exec --json \
+  "Analyze the current branch" \
+  > codex-events.jsonl
+```
+
+최종 result schema:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "passed": {"type": "boolean"},
+    "critical_count": {"type": "integer", "minimum": 0},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "warning", "suggestion"]
+          },
+          "file": {"type": "string"},
+          "line": {"type": ["integer", "null"]},
+          "message": {"type": "string"}
+        },
+        "required": ["severity", "file", "line", "message"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["passed", "critical_count", "findings"],
+  "additionalProperties": false
+}
+```
+
+```bash
+codex exec \
+  "Review the current changes" \
+  --output-schema ./review-schema.json \
+  -o ./review-result.json
+```
+
+CI gate는 JSONL event stream이 아니라 최종 schema output을 파싱하는 편이 단순합니다.
+
+### 4. Exit code와 결과 의미를 분리
+
+Codex process가 성공적으로 끝났다는 것과 review가 통과했다는 것은 다릅니다.
+
+```bash
+set -euo pipefail
+
+codex exec \
+  "Review the current changes" \
+  --output-schema ./review-schema.json \
+  -o ./review-result.json
+
+critical_count="$(jq '.critical_count' review-result.json)"
+
+if [ "$critical_count" -gt 0 ]; then
+  echo "Critical findings detected: $critical_count"
+  exit 1
+fi
+```
+
+### 5. 공식 GitHub Action
+
+```yaml
+name: Codex Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/review.md
+          output-file: codex-output.md
+          sandbox: read-only
+```
+
+공식 Action은 Codex 설치와 API proxy 실행을 포함해 key exposure를 줄이는 방향으로 설계되어 있습니다.
+
+### 6. Secret scope
+
+다음은 피합니다.
+
+```yaml
+env:
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+steps:
+  - run: npm install
+  - run: npm test
+  - run: arbitrary-repo-script
+  - run: codex exec ...
+```
+
+Checkout된 untrusted code와 같은 job 전체에 API key를 노출하면 dependency lifecycle script나 build script가 secret을 읽을 수 있습니다. Key는 Codex invocation에만 최소 범위로 전달합니다.
+
+### 7. Batch API와 CI gate 구분
+
+```text
+PR merge 전 즉시 판정
+→ codex exec / real-time API
+
+매주 전체 저장소 offline 분석
+→ OpenAI Batch API
+```
+
+Batch는 비용 효율적이지만 24시간 completion window이므로 immediate gate에 맞지 않습니다.
+
+### 8. Prompt file을 version control
+
+`.github/codex/prompts/review.md`:
+
+```markdown
+# Review scope
+
+Review only changes between the PR branch and its base.
+
+## Report only
+
+- reachable correctness bugs
+- exploitable security vulnerabilities
+- behavior regressions
+- missing tests for changed behavior
+
+## Output
+
+Every finding requires:
+- severity
+- file and line
+- evidence
+- impact
+- fix
+
+Do not report cosmetic style preferences.
+```
+
+Prompt, schema, fixture를 함께 versioning하면 review behavior 변경을 추적할 수 있습니다.
+
+
+
+### 9. `codex exec`와 Codex SDK 선택 기준
+
+| 상황 | 권장 |
+|---|---|
+| shell step 하나로 실행 | `codex exec` |
+| final file/schema만 필요 | `codex exec -o`, `--output-schema` |
+| 같은 coding thread를 여러 turn 이어감 | Codex SDK |
+| thread ID 저장 후 다음 pipeline에서 resume | Codex SDK |
+| 여러 Codex thread를 programmatically 병렬 관리 | Codex SDK |
+| broader release agent와 approval/handoff | OpenAI Agents SDK |
+
+### 10. TypeScript Codex SDK 기반 CI worker
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+
+type ReviewResult = {
+  threadId: string;
+  response: string;
+};
+
+export async function runReview(): Promise<ReviewResult> {
+  const codex = new Codex();
+  const thread = codex.startThread();
+
+  const result = await thread.run(
+    [
+      "Review the current checkout against main.",
+      "Do not edit files.",
+      "Report only reachable correctness, security,",
+      "regression, and missing-test findings.",
+    ].join("\n"),
+  );
+
+  const threadId = thread.id;
+  if (!threadId) {
+    throw new Error("Codex thread ID was not initialized");
+  }
+
+  return {
+    threadId,
+    response: result.finalResponse,
+  };
+}
+```
+
+SDK는 application object로 결과를 받기 쉽고, 후속 turn을 같은 thread에 보낼 수 있습니다.
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+
+async function diagnoseThenProposeFix(): Promise<void> {
+  const codex = new Codex();
+  const thread = codex.startThread();
+
+  const diagnosis = await thread.run(
+    "Diagnose the CI failure"
+  );
+  console.log(diagnosis.finalResponse);
+
+  const proposal = await thread.run(
+    "Based on the diagnosis, propose the minimal fix"
+  );
+  console.log(proposal.finalResponse);
+}
+
+await diagnoseThenProposeFix();
+```
+
+### 11. Python Codex SDK worker
+
+```python
+from openai_codex import Codex, Sandbox
+
+
+def run_ci_diagnosis() -> str:
+    with Codex() as codex:
+        thread = codex.thread_start(
+            sandbox=Sandbox.read_only,
+        )
+
+        result = thread.run(
+            "Diagnose the failing CI checks. Do not edit."
+        )
+        return result.final_response
+```
+
+### 12. Codex app Automations는 CI gate와 다르다
+
+App의 Automations는 다음에 적합합니다.
+
+```text
+매일 issue triage
+정기 CI failure 요약
+daily release brief
+주기적 bug scan
+Automation 결과를 review queue에서 확인
+```
+
+하지만 merge gate는 다음 특성이 필요합니다.
+
+```text
+commit SHA에 고정
+deterministic trigger
+machine-readable result
+exit code
+required check
+secret scope
+reproducible log
+```
+
+따라서 App Automation을 GitHub required check의 직접 대체물로 설명하지 않습니다.
+
+### 13. Agents SDK가 필요한 release workflow
+
+```text
+release manager agent
+├─ CI 상태 조회
+├─ policy 검사
+├─ change-management approval
+├─ Codex coding specialist에게 fix 요청
+└─ 사람 승인 후 deploy tool 호출
+```
+
+이처럼 coding 외 business workflow가 결합될 때 Agents SDK가 상위 orchestration을 맡습니다.
+
+### 공식 문서
+
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [Codex GitHub Action](https://developers.openai.com/codex/github-action)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

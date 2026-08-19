@@ -378,3 +378,212 @@ D) permission (재시도 불가) - 접근 권한
 ---
 
 > 🔗 다음 챕터: [샘플 문제 해설 Q1~Q4](23_sample_q1_4.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Responses Structured Outputs 기반 추출 파이프라인
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | 추출 pipeline의 code/schema/test를 개발·검토하는 데 사용합니다. |
+| **Codex app** | 동일 개발 작업을 UI에서 수행합니다. Production extraction runtime은 아닙니다. |
+| **Codex SDK** | 추출 repository를 수정·검증하는 coding automation에 적합하지만 일반 문서 추출 API 자체는 아닙니다. |
+| **OpenAI Agents SDK** | 여러 tool, validation, approval이 있는 production extraction workflow에 사용할 수 있습니다. |
+
+> **별도 OpenAI API 계층:** 순수 structured extraction의 primary 계층은 Responses API Structured Outputs입니다.
+
+### 1. 이 시나리오의 OpenAI 핵심은 Structured Outputs
+
+최종 추출 결과가 목적이라면 가상의 tool call보다 `responses.parse()`와 Pydantic schema가 더 직접적입니다.
+
+```python
+import os
+from typing import Literal, Optional
+
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
+client = OpenAI()
+MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6")
+
+
+class Evidence(BaseModel):
+    document_id: str
+    page: Optional[int] = None
+    excerpt: str
+
+
+class Invoice(BaseModel):
+    invoice_number: Optional[str] = None
+    vendor_name: Optional[str] = None
+    total_amount: Optional[float] = Field(default=None, ge=0)
+    currency: Optional[str] = None
+    tax_rate: Optional[float] = Field(default=None, ge=0)
+    discount_code: Optional[str] = None
+    payment_due_date: Optional[str] = None
+    evidence: list[Evidence] = []
+
+
+class ExtractionResult(BaseModel):
+    status: Literal[
+        "ok",
+        "partial",
+        "not_found",
+        "access_error",
+        "parse_error",
+    ]
+    data: Optional[Invoice] = None
+    error_message: Optional[str] = None
+
+
+response = client.responses.parse(
+    model=MODEL,
+    input=[
+        {
+            "role": "system",
+            "content": """
+Extract only values explicitly supported by the document.
+
+Rules:
+- Missing information must be null.
+- Do not infer tax rate or due date.
+- Preserve exact identifiers.
+- Every non-null monetary claim requires evidence.
+""",
+        },
+        {
+            "role": "user",
+            "content": document_text,
+        },
+    ],
+    text_format=ExtractionResult,
+)
+
+result = response.output_parsed
+```
+
+### 2. Nullable만으로 hallucination이 완전히 사라지지는 않는다
+
+Nullable은 모델이 “모르는 값”을 표현할 통로를 제공합니다. 하지만 잘못 읽은 값을 null 대신 넣을 수 있으므로 source evidence 검증이 필요합니다.
+
+```python
+def validate_result(
+    result: ExtractionResult,
+) -> list[str]:
+    errors: list[str] = []
+
+    if result.status == "ok" and result.data is None:
+        errors.append("ok status requires data")
+
+    if result.data is None:
+        return errors
+
+    invoice = result.data
+
+    if invoice.total_amount is not None and not invoice.evidence:
+        errors.append("total_amount requires evidence")
+
+    if invoice.currency is None and invoice.total_amount is not None:
+        errors.append("currency required with total_amount")
+
+    return errors
+```
+
+### 3. 접근 실패와 not_found
+
+```text
+문서를 정상적으로 읽었지만 invoice가 없음
+→ not_found
+
+storage permission으로 문서를 읽지 못함
+→ access_error
+
+OCR/text parser가 실패
+→ parse_error
+```
+
+모두 `data: null`일 수 있으므로 status가 없으면 retry 정책을 결정할 수 없습니다.
+
+### 4. Selective retry
+
+```python
+def should_retry(result: ExtractionResult, errors: list[str]) -> bool:
+    if result.status == "access_error":
+        return True
+
+    if result.status == "parse_error":
+        return True
+
+    if result.status == "not_found":
+        return False
+
+    return any(
+        "format" in error or "requires evidence" in error
+        for error in errors
+    )
+```
+
+원문에 정보가 없는 상태를 반복 호출로 해결하려 하지 않습니다.
+
+### 5. Multi-pass extraction
+
+```text
+Pass 1
+→ 문서별 structured extraction
+
+Pass 2
+→ deterministic validation
+
+Pass 3
+→ cross-document duplicate/conflict detection
+
+Pass 4
+→ unresolved conflict human review
+```
+
+Cross-document 단계의 입력은 raw 문서 전체보다 검증된 structured object와 evidence reference를 사용합니다.
+
+### 6. 파생 값
+
+문서에 총액만 있고 세율을 역산하는 경우 직접 추출과 구분합니다.
+
+```python
+class DerivedValue(BaseModel):
+    value: float
+    derived: bool
+    formula: Optional[str] = None
+    source_fields: list[str] = []
+```
+
+모델이 계산한 파생 값을 source에 직접 기재된 값처럼 저장하면 provenance가 깨집니다.
+
+### 7. Codex의 역할
+
+Codex는 다음을 개발하는 데 사용합니다.
+
+- extraction schema
+- validator
+- fixture와 golden data
+- retry policy
+- Batch submission code
+- regression report
+
+실제 production extraction runtime은 Responses API나 Agents SDK입니다.
+
+
+### 공식 문서
+
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [Responses API](https://developers.openai.com/api/docs/guides/responses)
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

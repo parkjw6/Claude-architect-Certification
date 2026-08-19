@@ -688,3 +688,188 @@ D) 고객에게 다시 물어봄
 ---
 
 > 🔗 다음 챕터: [시험 범위 포함 주제](27_in_scope.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: 50문제를 Codex 관점으로 변환하는 해답 키
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | Claude Code 문제를 `AGENTS.md`, Skill, subagent, MCP, exec로 변환하는 기본 답입니다. |
+| **Codex app** | CLI와 공통인 답은 반복하지 않고, worktree·Automations·visual supervision만 별도 app 답으로 봅니다. |
+| **Codex SDK** | coding agent를 programmatic thread로 호출해야 하는 문제에 사용합니다. |
+| **OpenAI Agents SDK** | 고객지원·연구·업무 agent application 문제에 사용합니다. |
+
+기존 50문제는 Claude 시험용이므로 정답을 바꾸지 않습니다. 대신 문제를 푼 뒤 **제품 syntax와 underlying principle을 분리**해 두 번째 답을 작성합니다.
+
+### 1. Domain 1: Agentic Architecture 변환
+
+| Claude 문제 키워드 | Codex/OpenAI 해석 |
+|---|---|
+| `stop_reason` | Claude API 전용. CLI/app/SDK는 Codex runtime, Agents SDK는 `Runner`가 loop 관리 |
+| Task context | Codex subagent도 bounded task context를 명시적으로 받아야 함 |
+| `allowedTools: Task` | Codex에는 복사하지 않음. Native subagents 사용 |
+| 한 응답에서 여러 Task | CLI subagent / app parallel thread / Codex SDK 여러 thread / Agents SDK agent-as-tool |
+| 반드시 N개 병렬 | Codex SDK 또는 Agents SDK/application code의 `Promise.all()`·`asyncio.gather()` |
+| critical business rule | application code에서 강제 |
+| PostToolUse | Codex native `PostToolUse` Hook |
+| PreToolUse | Codex native `PreToolUse` Hook |
+| `fork_session` | Codex subagent, `/side`, 별도 run의 목적과 비교 |
+| prompt chaining | 단계 의존성이 있는 code-driven workflow |
+| max iteration | 주 종료 조건이 아니라 안전망 |
+| Hub-and-Spoke | Agents SDK manager pattern |
+| session resume | 사용하는 Codex/Agents SDK session 기능을 공식 문서에서 확인 |
+| dynamic decomposition | model-directed orchestration |
+| context 전달 | task contract로 목표·범위·제약·output 전달 |
+
+### 2. Domain 2: Tool Design & MCP 변환
+
+| Claude 문제 키워드 | Codex/OpenAI 해석 |
+|---|---|
+| tool description | MCP/function tool 모두 동일하게 중요 |
+| transient error | backoff retry |
+| `tool_choice: any` | OpenAI에서는 `required` 등 제품별 값 확인 |
+| tool 수 18개 | hard limit 아님. 역할 분리·filter·tool search 고려 |
+| `.mcp.json` | `.codex/config.toml` |
+| `${ENV_VAR}` | token value는 env/secret store |
+| Grep vs Glob | 목적은 동일: content search vs path discovery |
+| empty vs access failure | typed status/envelope로 분리 |
+
+OpenAI Agents SDK의 tool choice는 `auto`, `required`, `none`, 특정 tool 이름처럼 표현될 수 있습니다. Anthropic의 문자열 값을 그대로 복사하지 않습니다.
+
+### 3. Domain 3: Claude Code 변환
+
+| Claude 정답 | Codex 대응 |
+|---|---|
+| `CLAUDE.md` | `AGENTS.md` |
+| 팀 command | repo `.agents/skills/` |
+| `.claude/rules/paths` | 정확한 1:1 없음 |
+| Plan Mode | `/plan` |
+| `claude -p` | `codex exec` |
+| `context: fork` | subagent |
+| `@import` | Codex에서는 계층적 AGENTS discovery를 우선 |
+| JSON output | `--json` event stream 또는 `--output-schema` final schema |
+| 사용자 CLAUDE | `~/.codex/AGENTS.md` |
+
+### 4. Domain 4: Prompt/Output 변환
+
+```text
+명시적 기준
+→ 동일
+
+Few-shot
+→ 동일, Skill references와 eval fixture로 관리
+
+tool_use JSON
+→ Structured Outputs 또는 Function Calling
+
+nullable
+→ Pydantic Optional/null
+
+Batch
+→ OpenAI Batch API
+
+독립 review
+→ /review, codex review, reviewer subagent
+```
+
+### 5. Domain 5: Context/Reliability 변환
+
+```text
+Lost-in-the-Middle
+→ concise AGENTS + bounded Skill/subagent
+
+요약 사실 보존
+→ typed state + summary validation
+
+escalation
+→ objective code trigger + Agents SDK HITL
+
+구조화 error
+→ ResultEnvelope
+
+scratchpad
+→ 작업 메모일 뿐 source of truth 아님
+
+상충 정보
+→ source별 후보 보존
+```
+
+### 제품 계층을 묻는 문제의 빠른 답
+
+| 문제 표현 | 선택 |
+|---|---|
+| 개발자가 terminal에서 repository를 직접 작업 | Codex CLI |
+| 사람이 여러 agent/worktree/diff를 UI로 감독 | Codex app |
+| 내부 프로그램이 Codex thread를 start/run/resume | Codex SDK |
+| 고객지원·연구·업무 agent와 handoff/HITL | OpenAI Agents SDK |
+| 일반 data schema를 model API에서 추출 | Responses Structured Outputs |
+| 대량 비차단 request | Batch API |
+
+### 6. 모든 문제에 적용할 10개 bucket
+
+문제를 읽고 먼저 아래 중 하나로 분류합니다.
+
+| 질문 | Codex/OpenAI 선택 |
+|---|---|
+| 항상 적용되는 repository 지침인가? | `AGENTS.md` |
+| 반복 workflow인가? | Skill |
+| noisy/독립 전문 작업인가? | Subagent |
+| 외부 시스템 연결인가? | MCP |
+| lifecycle event custom logic인가? | Hook |
+| shell command 정책인가? | Rules/approval |
+| 실제 파일·network capability인가? | Sandbox |
+| critical business invariant인가? | Application code |
+| machine-readable final output인가? | Structured Outputs |
+| CI automation인가? | `codex exec` / GitHub Action |
+
+### 7. 연습 방법
+
+각 문제마다 답안을 두 줄로 기록합니다.
+
+```text
+Claude 시험 정답:
+A — .claude/commands/
+
+Underlying principle:
+팀이 version control로 공유하는 reusable workflow
+
+Codex 대응:
+.agents/skills/<name>/SKILL.md
+```
+
+이 방식은 Claude syntax를 잊지 않으면서 다른 agent platform에도 원리를 적용하게 해줍니다.
+
+### 8. 혼동 방지 규칙
+
+- `.codex/rules/`를 Claude `.claude/rules/`의 대응으로 쓰지 않습니다.
+- Codex Skill이 자동으로 별도 context를 만든다고 가정하지 않습니다.
+- `codex exec --json`을 final schema output으로 오해하지 않습니다.
+- Codex CLI, Codex app, Codex SDK, OpenAI Agents SDK를 하나의 runtime처럼 설명하지 않습니다.
+- 모델 confidence를 objective approval probability로 사용하지 않습니다.
+
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

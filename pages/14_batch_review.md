@@ -249,3 +249,140 @@ def review_with_confidence(code: str) -> dict:
 ---
 
 > 🔗 다음 챕터: [컨텍스트 관리 전략](15_context_management.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: OpenAI Batch와 Codex 독립 리뷰 아키텍처
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | `codex review`와 `codex exec`로 즉시 repository review를 수행합니다. |
+| **Codex app** | 여러 review thread와 worktree를 시각적으로 병렬 관리하고 diff에 comment할 때 app의 이점이 큽니다. |
+| **Codex SDK** | 내부 review bot이나 CI가 Codex coding thread를 start/run/resume하도록 embedding할 때 사용합니다. |
+| **OpenAI Agents SDK** | 여러 reviewer 역할을 agents-as-tools 또는 code orchestration으로 구성할 때 사용합니다. |
+
+> **별도 OpenAI API 계층:** 대량 비차단 request는 OpenAI Batch API가 별도 계층입니다.
+
+### 1. Batch API 대응
+
+Anthropic Message Batches와 OpenAI Batch API의 설계 원칙은 유사합니다.
+
+```text
+즉각적인 응답이 필요하지 않음
++ 요청 간 독립성이 높음
++ 대량 처리
+→ Batch API
+
+사용자가 기다림
+또는 merge/deploy gate
+→ 실시간 API / codex exec
+```
+
+OpenAI Batch API도 24시간 completion window를 사용하며 표준 동기 호출보다 비용이 낮고 별도 rate-limit pool을 사용합니다. `/v1/responses` 요청을 JSONL로 제출할 수 있습니다.
+
+### 2. Batch와 Codex CLI를 구분
+
+```text
+10,000개 문서를 야간 분류
+→ OpenAI Batch API
+
+현재 repository의 PR을 즉시 리뷰
+→ /review 또는 codex review
+
+CI에서 현재 checkout을 분석
+→ codex exec
+```
+
+Codex CLI는 workspace를 탐색·수정하는 coding agent이고, Batch API는 대량 API inference transport입니다.
+
+### 3. 독립 리뷰의 Codex 구현
+
+가장 간단한 repository 리뷰:
+
+```text
+/review
+```
+
+비대화형:
+
+```bash
+codex review --uncommitted
+codex review --base main
+codex review --commit "$COMMIT_SHA"
+```
+
+팀 기준이 더 필요하면 Skill을 만들고 read-only reviewer subagent에 위임합니다.
+
+```toml
+# .codex/agents/reviewer.toml
+
+name = "reviewer"
+description = "Independent reviewer for correctness and regression risks."
+sandbox_mode = "read-only"
+model_reasoning_effort = "high"
+
+developer_instructions = """
+Review independently from the implementation thread.
+Do not edit files.
+Prioritize correctness, security, regressions, and missing tests.
+Every finding needs a reachable path and file/line evidence.
+"""
+```
+
+### 4. Multi-pass 권장 구조
+
+```text
+Pass 1 — local
+- 변경 파일별 correctness
+- validation, error handling
+- local test gap
+
+Pass 2 — integration
+- cross-file contract mismatch
+- state transition
+- transaction boundary
+- backward compatibility
+
+Pass 3 — synthesis
+- 중복 제거
+- severity 재조정
+- release blocker 판정
+```
+
+각 pass의 intermediate raw output을 main context에 전부 넣지 말고, subagent별 구조화 summary를 합치는 편이 낫습니다.
+
+### 5. 모델 confidence만으로 자동 차단하지 않는다
+
+LLM이 생성한 `confidence: 0.93`은 통계적으로 교정된 확률이라고 가정할 수 없습니다. 자동 merge gate는 다음처럼 객관적 조건을 사용합니다.
+
+```text
+Critical finding
+AND reachable execution path
+AND changed-line evidence
+AND reproducible impact
+→ merge block
+
+그 외
+→ human review queue
+```
+
+
+### 공식 문서
+
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex slash commands](https://developers.openai.com/codex/cli/slash-commands)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

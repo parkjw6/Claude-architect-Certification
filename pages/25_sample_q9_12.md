@@ -232,3 +232,176 @@ if errors:
 ---
 
 > 🔗 다음 챕터: [추가 연습 문제 50선](26_practice_questions.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Q9~Q12의 Codex/OpenAI 대응
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | Skill, subagent, review, output schema의 기본 대응입니다. |
+| **Codex app** | 격리 thread/worktree와 visual review를 제공하지만 Claude `context: fork` syntax를 쓰지는 않습니다. |
+| **Codex SDK** | 여러 Codex coding thread와 result object를 programmatically 다룹니다. |
+| **OpenAI Agents SDK** | 범용 병렬 specialist와 structured output workflow를 구현합니다. |
+
+### Q9. False Positive가 높은 category
+
+원칙은 동일합니다.
+
+```text
+category별 오탐 수집
+→ report/ignore 명시 기준
+→ positive·negative·boundary fixture
+→ Skill reference 업데이트
+→ 고정 eval 재실행
+→ 안정화 후 gate 재활성화
+```
+
+Codex repository 예시:
+
+```text
+.agents/skills/security-review/
+├── SKILL.md
+└── references/
+    ├── report-examples.md
+    └── ignore-examples.md
+```
+
+Model을 더 크게 바꾸기 전에 판정 계약과 fixture를 먼저 고칩니다.
+
+### Q10. `context: fork`
+
+Claude 시험 정답은 `context: fork`입니다.
+
+Codex에서는 Skill frontmatter에 이를 복사하지 않습니다.
+
+```text
+Claude Skill context: fork
+→ Codex subagent/custom agent
+```
+
+```toml
+# .codex/agents/test-generator.toml
+
+name = "test_generator"
+description = "Generates tests in an isolated specialist context."
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Inspect the target implementation and existing tests.
+Generate only relevant tests.
+Do not modify production code unless explicitly asked.
+Run the smallest relevant test suite.
+"""
+```
+
+Skill은 해당 agent에 위임하도록 지시합니다.
+
+```markdown
+Delegate test generation to the `test_generator` subagent.
+Return only changed files, test results, and unresolved gaps.
+```
+
+`workspace-write`는 Claude의 `allowed-tools: Read, Write, Bash`와 정확한 1:1이 아닙니다. 더 세밀한 command 정책은 Hooks/Rules/approval로 보완합니다.
+
+### Q11. 병렬 subagent
+
+Claude 시험:
+
+```text
+한 coordinator 응답에서 여러 Task 호출
+```
+
+Codex/OpenAI에서는 목적별로 나뉩니다.
+
+```text
+Codex repository 작업
+→ native subagents
+
+Responses API 한 call에서 모델 주도 병렬화
+→ Responses Multi-agent beta
+
+Agents SDK manager
+→ Agent.as_tool()
+
+항상 정해진 N개 run
+→ asyncio.gather()
+```
+
+```python
+market, competitors, regulation = await asyncio.gather(
+    Runner.run(market_agent, market_task),
+    Runner.run(competitor_agent, competitor_task),
+    Runner.run(regulation_agent, regulation_task),
+)
+```
+
+`parallel_tool_calls=True`는 여러 call을 **허용**하는 것이지 항상 세 개를 생성한다는 보장은 아닙니다.
+
+### Q12. 올바른 JSON
+
+Claude 시험:
+
+```text
+tool_use + input_schema
+```
+
+OpenAI final output:
+
+```text
+Structured Outputs
+```
+
+```python
+class ReviewResult(BaseModel):
+    passed: bool
+    findings: list[Finding]
+
+
+response = client.responses.parse(
+    model="gpt-5.6",
+    input=prompt,
+    text_format=ReviewResult,
+)
+
+result = response.output_parsed
+```
+
+Codex CLI:
+
+```bash
+codex exec \
+  "Review the repository" \
+  --output-schema ./review-schema.json \
+  -o ./review.json
+```
+
+어느 쪽이든 semantic validation은 별도입니다.
+
+```text
+schema correct
+≠
+claim factually correct
+```
+
+
+### 공식 문서
+
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Responses Multi-agent](https://developers.openai.com/api/docs/guides/responses-multi-agent)
+- [Agents SDK tools and agents-as-tools](https://openai.github.io/openai-agents-python/tools/)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

@@ -304,3 +304,497 @@ D) CI/CD 파이프라인을 먼저 설정
 ---
 
 > 🔗 다음 챕터: [시나리오 3 — 멀티에이전트 연구 시스템](19_scenario3_multi_agent.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Claude Code 저장소 구성을 Codex 구조로 변환하기
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | 이 장의 기본이자 primary 계층입니다. repository를 직접 탐색·수정·검증합니다. |
+| **Codex app** | CLI 기능을 UI로 사용하며, 병렬 thread, built-in worktree, visual diff, editor handoff, Skill UI가 app 전용 장점입니다. |
+| **Codex SDK** | 동일한 Codex coding agent를 내부 도구·CI·서비스에서 programmatically 호출합니다. |
+| **OpenAI Agents SDK** | Codex가 broader agent workflow의 coding specialist일 때 상위 orchestration을 담당합니다. |
+
+### 1. 전체 대응 구조
+
+```text
+Claude Code                         Codex
+────────────────────────────────────────────────────────
+CLAUDE.md                           AGENTS.md
+nested CLAUDE.md                    nested AGENTS.md
+.claude/rules paths glob            정확한 1:1 없음
+.claude/commands/*.md               .agents/skills/*/SKILL.md
+Skill context: fork                 subagent/custom agent
+Skill allowed-tools                 sandbox/MCP filter/hooks/rules
+.mcp.json                           .codex/config.toml
+PreToolUse/PostToolUse              Codex native Hooks
+command permission                  .codex/rules/*.rules
+claude -p                           codex exec
+--json-schema                       --output-schema
+Plan Mode                           /plan
+독립 review                         /review, codex review
+```
+
+### 2. 권장 repository layout
+
+```text
+repo/
+├── AGENTS.md
+├── frontend/
+│   └── AGENTS.md
+├── backend/
+│   └── AGENTS.md
+│
+├── .agents/
+│   └── skills/
+│       ├── team-review/
+│       │   ├── SKILL.md
+│       │   └── references/
+│       │       └── checklist.md
+│       └── test-analysis/
+│           └── SKILL.md
+│
+├── .codex/
+│   ├── config.toml
+│   ├── agents/
+│   │   ├── explorer.toml
+│   │   └── reviewer.toml
+│   ├── hooks.json
+│   ├── hooks/
+│   │   └── pre_tool_policy.py
+│   └── rules/
+│       └── default.rules
+│
+└── .github/
+    └── workflows/
+        └── codex-review.yml
+```
+
+### 3. `AGENTS.md`
+
+```markdown
+# Repository instructions
+
+## Stack
+
+- Frontend: React, TypeScript, Vite
+- Backend: Python, FastAPI, PostgreSQL
+- Tests: Vitest/Testing Library and pytest
+
+## Change policy
+
+- Keep public API contracts backward compatible.
+- Do not perform unrelated refactors.
+- Never commit credentials.
+- Read affected tests before changing behavior.
+- Add or update tests for behavior changes.
+
+## Completion criteria
+
+- Run the smallest relevant test suite.
+- Run type checks for touched packages.
+- Report commands that could not run.
+- Summarize modified files and remaining risks.
+```
+
+`frontend/AGENTS.md`:
+
+```markdown
+# Frontend instructions
+
+- Define explicit prop types.
+- Test user-visible behavior.
+- Do not assert private component state.
+- Use memoization only for demonstrated need.
+```
+
+`backend/AGENTS.md`:
+
+```markdown
+# Backend instructions
+
+- Public functions require type hints.
+- Keep database writes transaction-scoped.
+- Map domain exceptions to API responses at the boundary.
+- Do not use blocking I/O inside async handlers.
+```
+
+### 4. Claude `.claude/rules/paths`의 대체
+
+Codex `.codex/rules/`는 glob-based coding guidance가 아닙니다. 다음 중 하나를 사용합니다.
+
+```text
+특정 directory 전체
+→ nested AGENTS.md
+
+여러 directory에 흩어진 *.test.tsx
+→ root AGENTS.md에 조건부 문장
+
+복잡한 test workflow
+→ testing Skill
+```
+
+Root 예시:
+
+```markdown
+## Test files
+
+When creating or modifying `*.test.ts` or `*.test.tsx`:
+
+- Use Vitest and Testing Library.
+- Test observable behavior.
+- Avoid implementation-detail assertions.
+- Mock external boundaries, not internal functions.
+```
+
+Claude의 path matcher처럼 runtime이 glob을 평가해 지침을 조건부 로드하는 정확한 동일 기능은 아닙니다. Codex가 instruction 조건을 해석해 적용합니다.
+
+### 5. 팀 공유 command는 Skill로
+
+```markdown
+<!-- .agents/skills/team-review/SKILL.md -->
+
+---
+name: team-review
+description: >
+  Review current changes using the team's correctness,
+  security, performance, and test criteria.
+---
+
+# Team review
+
+Review the current diff. Do not modify files.
+
+For every finding provide:
+
+1. severity
+2. file and line
+3. concrete evidence
+4. impact
+5. recommended correction
+
+Apply:
+- `references/checklist.md`
+```
+
+사용:
+
+```text
+$team-review
+```
+
+일반 review는 별도 Skill 없이 다음을 사용할 수 있습니다.
+
+```text
+/review
+```
+
+```bash
+codex review --uncommitted
+codex review --base main
+```
+
+### 6. 격리 작업은 subagent
+
+```toml
+# .codex/agents/test-analyzer.toml
+
+name = "test_analyzer"
+description = "Read-only test failure and coverage analyst."
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Analyze test failures and missing coverage.
+Do not edit code.
+Return root cause, evidence, and recommended tests.
+"""
+```
+
+Claude의:
+
+```yaml
+context: fork
+allowed-tools: Read, Grep, Bash
+```
+
+를 Codex Skill에 복사하지 않습니다. 격리는 subagent가, capability는 sandbox와 정책이 담당합니다.
+
+### 7. MCP 설정
+
+```toml
+# .codex/config.toml
+
+[mcp_servers.internal_docs]
+url = "https://docs.example.com/mcp"
+bearer_token_env_var = "DOCS_MCP_TOKEN"
+required = true
+enabled_tools = ["search_documents", "get_document"]
+default_tools_approval_mode = "prompt"
+```
+
+개인 token은 환경 변수로 둡니다.
+
+### 8. Hook
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/pre_tool_policy.py",
+            "timeout": 30,
+            "statusMessage": "Checking command policy"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Hook은 tool lifecycle의 custom logic입니다. Project hook은 trusted project에서 로드되며 변경된 hook definition은 review/trust가 필요합니다.
+
+### 9. Rules
+
+```python
+# .codex/rules/default.rules
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Remote writes require approval.",
+)
+
+prefix_rule(
+    pattern = ["rm", "-rf"],
+    decision = "forbidden",
+    justification = "Recursive deletion is prohibited.",
+)
+```
+
+### 10. Plan Mode 판단
+
+```text
+여러 subsystem에 영향
+migration 또는 public API 변경
+architecture trade-off 필요
+unknown root cause와 여러 대안
+→ /plan
+
+명확한 단일 파일 버그
+작은 문서 수정
+well-scoped test 추가
+→ 바로 구현 가능
+```
+
+Plan은 최종 목적이 아닙니다. 좋은 흐름은:
+
+```text
+explore
+→ plan
+→ implement
+→ validate
+→ independent review
+```
+
+### 11. 비대화형 실행
+
+```bash
+# 분석
+codex exec \
+  "Review the current checkout for release blockers"
+
+# 파일 수정 허용
+codex exec \
+  --sandbox workspace-write \
+  "Fix the failing unit tests"
+
+# 최종 schema
+codex exec \
+  "Extract release risk metadata" \
+  --output-schema ./risk-schema.json \
+  -o ./risk.json
+
+# 전체 event stream
+codex exec --json \
+  "Analyze the current branch" \
+  > ./codex-events.jsonl
+```
+
+`--json`은 최종 business object가 아니라 JSONL event stream입니다.
+
+### 12. 안전성 계층
+
+```text
+AGENTS.md
+→ 행동 지침
+
+Skill
+→ workflow 지침
+
+Hook
+→ lifecycle 검사
+
+Rules / approval
+→ command 정책
+
+Sandbox
+→ 실제 workspace capability
+
+GitHub/DB/cloud RBAC
+→ 외부 시스템 권한
+```
+
+Production deployment, secret access, destructive data operation은 저장소 prompt만으로 보호하지 않습니다.
+
+
+
+### 13. Codex app에서만 별도로 설명할 기능
+
+Codex app은 이 장의 CLI 기능을 자연어 UI로 실행합니다. 다음은 app에서 별도로 의미가 큰 기능입니다.
+
+```text
+여러 project와 thread를 동시에 화면에서 관리
+agent별 built-in worktree
+thread 안에서 diff review와 comment
+변경사항을 editor로 열기
+Skill 생성·관리 UI
+장시간 task의 진행 상태 전환·감독
+Automations와 review queue
+```
+
+예를 들어 CLI에서는 같은 repository에서 parallel agent를 직접 관리해야 하지만, app에서는 각 agent를 별도 thread/worktree에 두고 diff를 시각적으로 비교할 수 있습니다.
+
+Repository 파일 자체는 그대로 공유됩니다.
+
+```text
+AGENTS.md
+.agents/skills/
+.codex/config.toml
+.codex/agents/
+.codex/hooks.json
+.codex/rules/
+```
+
+따라서 app을 사용한다고 별도의 `APP_AGENTS.md`나 app 전용 Skill 형식을 만들지 않습니다.
+
+### 14. Codex SDK로 같은 coding workflow를 프로그램에서 호출
+
+#### TypeScript
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+
+const codex = new Codex();
+const thread = codex.startThread();
+
+const plan = await thread.run(
+  "Inspect this repository and plan the authentication migration"
+);
+
+if (!plan.finalResponse) {
+  throw new Error("Codex did not return a plan");
+}
+
+const implementation = await thread.run(
+  "Implement the approved plan and run the relevant tests"
+);
+
+console.log(implementation.finalResponse);
+```
+
+#### Python
+
+```python
+from openai_codex import Codex, Sandbox
+
+with Codex() as codex:
+    thread = codex.thread_start(
+        model="gpt-5.6-terra",
+        sandbox=Sandbox.workspace_write,
+    )
+
+    plan = thread.run(
+        "Plan the authentication migration"
+    )
+    print(plan.final_response)
+
+    implementation = thread.run(
+        "Implement the plan and run relevant tests"
+    )
+    print(implementation.final_response)
+
+    review = thread.run(
+        "Review the diff only",
+        sandbox=Sandbox.read_only,
+    )
+    print(review.final_response)
+```
+
+SDK를 선택하는 기준:
+
+```text
+사람이 terminal에서 작업
+→ Codex CLI
+
+사람이 desktop UI에서 여러 작업 감독
+→ Codex app
+
+내부 service나 developer portal이 Codex를 호출
+→ Codex SDK
+```
+
+### 15. OpenAI Agents SDK는 언제 추가하는가
+
+다음처럼 coding task보다 더 큰 workflow가 있을 때 Agents SDK를 상위 계층으로 사용합니다.
+
+```text
+release manager agent
+├─ Jira 상태 조회
+├─ Slack 승인 요청
+├─ deployment policy 판단
+└─ Codex coding specialist에게 patch 요청
+```
+
+이때 Codex는 coding specialist이고, Agents SDK는 business workflow와 handoff를 소유합니다.
+
+```text
+Agents SDK manager
+        ↓
+Codex CLI as MCP server 또는 Codex integration
+        ↓
+repository 수정·test·review
+```
+
+단순 repository 변경에 Agents SDK부터 도입하면 불필요한 orchestration complexity가 생길 수 있습니다.
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [Codex slash commands](https://developers.openai.com/codex/cli/slash-commands)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

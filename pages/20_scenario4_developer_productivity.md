@@ -339,3 +339,356 @@ D) Bash (find + grep)
 ---
 
 > 🔗 다음 챕터: [시나리오 5 — CI/CD 통합](21_scenario5_cicd.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Codex MCP, Hooks, Rules, Sandbox의 역할 분리
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | MCP, Hooks, Rules, Sandbox, Skills를 사용하는 기본 developer-tool 계층입니다. |
+| **Codex app** | Skill 생성·관리 UI와 여러 coding task의 visual supervision이 app 전용 장점입니다. |
+| **Codex SDK** | 내부 developer portal이나 bot에 Codex coding thread를 내장합니다. |
+| **OpenAI Agents SDK** | 여러 business/developer specialist를 조율하고 Codex를 coding specialist로 호출할 때 사용합니다. |
+
+### 1. “18개 tool”은 Codex의 공식 hard limit가 아니다
+
+원문의 수치는 tool surface가 너무 커질 때 selection 품질과 schema token 비용이 악화될 수 있다는 **설계 휴리스틱**으로 읽어야 합니다. Codex/OpenAI에 “18개를 넘으면 안 된다”는 고정 제한으로 적용하면 안 됩니다.
+
+Tool surface가 커지면 다음을 검토합니다.
+
+```text
+agent 역할 분리
+MCP enabled_tools / disabled_tools
+tool description 개선
+관련 tool만 조건부 노출
+Agents SDK tool search/deferred loading
+read-only와 write tool 분리
+```
+
+### 2. Codex MCP project config
+
+```toml
+# .codex/config.toml
+
+[mcp_servers.github_read]
+command = "github-mcp-server"
+args = ["stdio"]
+env_vars = ["GITHUB_TOKEN"]
+required = true
+
+enabled_tools = [
+  "search_code",
+  "get_file_contents",
+  "get_pull_request",
+]
+
+disabled_tools = [
+  "delete_repository",
+  "merge_pull_request",
+]
+
+default_tools_approval_mode = "prompt"
+```
+
+Remote HTTP:
+
+```toml
+[mcp_servers.internal_docs]
+url = "https://docs.example.com/mcp"
+bearer_token_env_var = "DOCS_MCP_TOKEN"
+startup_timeout_sec = 15
+tool_timeout_sec = 60
+required = true
+enabled_tools = ["search_documents", "get_document"]
+```
+
+프로젝트 config는 trusted project에서만 로드합니다. 개인 실험 MCP는 `~/.codex/config.toml`에 둡니다.
+
+### 3. Tool description checklist
+
+```text
+동사와 대상이 명확한 이름
+정확한 사용 시점
+필수 identifier와 format
+빈 결과의 의미
+multiple match의 처리
+side effect 여부
+비슷한 tool과의 구분
+error envelope
+```
+
+예:
+
+```text
+get_customer_by_erp_id
+- exact ERP ID로 한 명을 조회
+- free-text 이름 검색에는 사용하지 않음
+- 없으면 not_found
+- 중복은 data_error
+- read-only
+```
+
+### 4. Native Hooks
+
+`.codex/hooks.json`:
+
+```json
+{
+  "description": "Repository lifecycle policy",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/pre_tool_policy.py",
+            "timeout": 30,
+            "statusMessage": "Checking Bash command"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/post_tool_review.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`PreToolUse`는 Bash, `apply_patch`, MCP와 다수의 local function tool을 검사할 수 있습니다. Hosted tool은 같은 hook 경로에 포함되지 않을 수 있으므로 Hook을 완전한 보안 경계로 보지 않습니다.
+
+차단 반환:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Production command blocked."
+  }
+}
+```
+
+입력 rewrite:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "updatedInput": {
+      "command": "pytest tests/unit"
+    }
+  }
+}
+```
+
+### 5. Rules
+
+```python
+# .codex/rules/default.rules
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Remote writes require approval.",
+    match = [
+        "git push",
+        "git push origin feature/a",
+    ],
+    not_match = [
+        "git status",
+    ],
+)
+```
+
+Rules는 sandbox 밖에서 command를 어떻게 처리할지 결정합니다. `.claude/rules/`의 파일별 coding convention과 전혀 다른 기능입니다.
+
+### 6. Sandbox
+
+```text
+reviewer / explorer
+→ read-only
+
+일반 coding
+→ workspace-write
+
+fully isolated disposable environment에서만
+→ danger-full-access 고려
+```
+
+`workspace-write`는 Claude의 `allowed-tools: Write`보다 넓습니다. 파일 쓰기 외 routine command도 가능하므로 “Write tool만” 같은 세밀한 allowlist와 1:1이 아닙니다.
+
+### 7. Policy strength
+
+```text
+instruction
+< Skill
+< Hook / Rules / approval
+< Sandbox
+< external system RBAC
+```
+
+예를 들어 GitHub write operation은 MCP tool을 숨기는 것뿐 아니라 GitHub token 자체를 read-only permission으로 발급하는 것이 더 강한 통제입니다.
+
+### 8. Error response
+
+```json
+{
+  "status": "failed",
+  "error": {
+    "category": "permission",
+    "code": "GITHUB_WRITE_FORBIDDEN",
+    "retryable": false,
+    "attempted_action": "merge_pull_request",
+    "message": "The connected token has read-only repository permission."
+  }
+}
+```
+
+Agent가 오류를 우회하기 위해 다른 write tool을 찾지 않도록 required action과 retryability를 명시합니다.
+
+
+
+### Codex SDK로 내부 developer tool 만들기
+
+CLI command 하나로 충분하지 않고 자체 service/UI가 Codex thread를 소유해야 한다면 SDK를 사용합니다.
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+
+export async function analyzePullRequest(
+  repositoryPath: string,
+  prompt: string,
+) {
+  const codex = new Codex({
+    // 실제 configuration은 배포 환경과 SDK reference를 따릅니다.
+  });
+
+  const thread = codex.startThread({
+    workingDirectory: repositoryPath,
+  });
+
+  const result = await thread.run(prompt);
+  const threadId = thread.id;
+
+  if (!threadId) {
+    throw new Error("Codex thread ID was not initialized");
+  }
+
+  return {
+    threadId,
+    finalResponse: result.finalResponse,
+  };
+}
+```
+
+> SDK option 이름과 thread metadata surface는 version에 따라 바뀔 수 있으므로 실제 구현 시 현재 package reference를 확인합니다. 핵심은 application이 Codex thread lifecycle을 소유한다는 점입니다.
+
+### Agents SDK가 Codex를 specialist로 호출하는 경우
+
+Developer productivity system이 coding 외 업무까지 포함하면 Agents SDK가 상위 coordinator가 될 수 있습니다.
+
+```text
+Developer assistant
+├─ Jira agent
+├─ Slack agent
+├─ docs agent
+└─ Codex coding specialist
+```
+
+공식 Codex SDK 문서는 broader orchestrated workflow에서 Codex가 specialist라면 Codex CLI를 MCP server로 실행하고 Agents SDK에서 조율하는 패턴을 제시합니다.
+
+```text
+OpenAI Agents SDK
+        ↓ MCP
+Codex CLI / Codex coding agent
+        ↓
+repository
+```
+
+구분:
+
+```text
+Codex SDK
+= 동일한 Codex coding agent를 자체 tool에 직접 embed
+
+Agents SDK + Codex MCP
+= 범용 manager가 Codex를 여러 specialist 중 하나로 사용
+```
+
+Agents SDK에는 workspace-scoped Codex 작업을 호출하는 실험적 `codex_tool`도 있습니다.
+
+```python
+from agents import Agent
+from agents.extensions.experimental.codex import (
+    ThreadOptions,
+    TurnOptions,
+    codex_tool,
+)
+
+agent = Agent(
+    name="release_manager",
+    instructions=(
+        "Use Codex only for bounded repository tasks. "
+        "Keep release policy decisions in this manager."
+    ),
+    tools=[
+        codex_tool(
+            working_directory="/path/to/repo",
+            sandbox_mode="workspace-write",
+            default_thread_options=ThreadOptions(
+                approval_policy="never",
+                web_search_mode="disabled",
+            ),
+            default_turn_options=TurnOptions(
+                idle_timeout_seconds=60,
+            ),
+            persist_session=True,
+        )
+    ],
+)
+```
+
+이 기능은 **실험적**입니다. 일반적인 선택 순서는 다음과 같습니다.
+
+```text
+Codex만 자체 product/tool에 embedding
+→ Codex SDK
+
+Agents SDK의 여러 specialist 중 Codex가 하나
+→ Codex MCP 또는 experimental codex_tool
+```
+
+### 공식 문서
+
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- [Agents SDK tools and agents-as-tools](https://openai.github.io/openai-agents-python/tools/)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->
