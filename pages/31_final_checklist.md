@@ -132,3 +132,218 @@
 ---
 
 > 🔗 마지막으로: [마치며](32_conclusion.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Codex/OpenAI 최종 체크리스트
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | repository 사용, configuration, exec/review의 최종 점검 대상입니다. |
+| **Codex app** | parallel threads, worktrees, visual diff, Skill UI, Automations를 별도 점검합니다. |
+| **Codex SDK** | TS/Python installation, thread start/run/resume, sandbox, result handling을 점검합니다. |
+| **OpenAI Agents SDK** | Agent/Runner, tools, orchestration, guardrails, sessions, HITL을 점검합니다. |
+
+## A. 제품 계층
+
+- [ ] Codex CLI와 OpenAI Agents SDK를 구분할 수 있다.
+- [ ] Responses API와 Agents SDK 중 loop 소유자가 누구인지 설명할 수 있다.
+- [ ] Batch API를 interactive workflow에 사용하지 않는다.
+- [ ] Codex는 production 고객지원 runtime이 아니라 coding agent라는 점을 구분한다.
+
+## B. AGENTS.md
+
+- [ ] root `AGENTS.md`에는 repo 공통 규칙만 둔다.
+- [ ] directory-specific 규칙은 nested `AGENTS.md`에 둔다.
+- [ ] `AGENTS.override.md`의 용도를 알고 있다.
+- [ ] always-on 문서를 과도하게 키우지 않는다.
+- [ ] critical invariant를 `AGENTS.md`만으로 강제하지 않는다.
+
+## C. Skills
+
+- [ ] 팀 Skill은 `.agents/skills/<name>/SKILL.md`에 둔다.
+- [ ] `name`과 `description`이 실제 trigger를 명확히 설명한다.
+- [ ] 긴 예시와 기준은 `references/`로 분리한다.
+- [ ] 반복 script는 `scripts/`로 분리한다.
+- [ ] Codex Skill에 Claude의 `context: fork`를 그대로 넣지 않는다.
+- [ ] `argument-hint` 대신 Required input 계약을 작성한다.
+
+## D. Subagents
+
+- [ ] noisy exploration은 subagent에 위임한다.
+- [ ] project custom agent는 `.codex/agents/*.toml`에 둔다.
+- [ ] reviewer/explorer는 기본적으로 `read-only`를 사용한다.
+- [ ] task에 goal, scope, exclusions, output을 명시한다.
+- [ ] 병렬 agent가 같은 mutable file을 수정하지 않게 한다.
+- [ ] 반드시 N개 run이 필요하면 code-level orchestration을 사용한다.
+
+## E. MCP
+
+- [ ] project MCP는 `.codex/config.toml`에 둔다.
+- [ ] 개인 MCP는 `~/.codex/config.toml`에 둔다.
+- [ ] token 값은 repository에 저장하지 않는다.
+- [ ] `enabled_tools`와 `disabled_tools`로 tool surface를 줄인다.
+- [ ] write tool은 approval과 external RBAC까지 확인한다.
+- [ ] project config는 trusted project에서 로드된다는 점을 이해한다.
+
+## F. Hooks, Rules, Sandbox
+
+- [ ] Hook은 lifecycle custom code라는 점을 안다.
+- [ ] `PreToolUse`와 `PostToolUse`의 차이를 안다.
+- [ ] Hook이 모든 hosted tool을 포괄하는 security boundary가 아님을 안다.
+- [ ] Rules는 shell command 정책이며 coding glob rule이 아님을 안다.
+- [ ] `read-only`, `workspace-write`, `danger-full-access`를 구분한다.
+- [ ] 실제 production permission은 외부 시스템에서 다시 강제한다.
+
+## G. Review와 Plan
+
+- [ ] 대규모 변경 전 `/plan`을 사용한다.
+- [ ] 작은 명확한 수정에는 불필요한 plan을 강제하지 않는다.
+- [ ] 일반 review는 `/review` 또는 `codex review`를 사용할 수 있다.
+- [ ] 팀 review criteria는 Skill로 관리한다.
+- [ ] 구현 thread의 self-review만 믿지 않는다.
+- [ ] finding은 file, line, evidence, impact를 포함한다.
+
+## H. CI/CD
+
+- [ ] Claude `-p`의 Codex 대응이 `codex exec`임을 안다.
+- [ ] `--json`은 JSONL event stream임을 안다.
+- [ ] final schema에는 `--output-schema`를 쓴다.
+- [ ] 분석은 read-only로 시작한다.
+- [ ] write가 필요할 때만 workspace-write로 확장한다.
+- [ ] API key를 untrusted build step과 job-wide로 공유하지 않는다.
+- [ ] 공식 `openai/codex-action@v1`을 검토한다.
+
+## I. Structured Outputs
+
+- [ ] final output과 function call 목적을 구분한다.
+- [ ] Pydantic Optional/null을 올바르게 설계한다.
+- [ ] `not_found`, `access_error`, `parse_error`를 구분한다.
+- [ ] schema validation 뒤 semantic validation을 수행한다.
+- [ ] source에 없는 값은 retry로 발명하지 않는다.
+- [ ] 중요한 claim에 evidence/source를 붙인다.
+
+## J. Agents SDK
+
+- [ ] `Agent`와 `Runner`의 역할을 설명할 수 있다.
+- [ ] manager pattern과 handoff를 구분한다.
+- [ ] `Agent.as_tool()`의 용도를 안다.
+- [ ] fixed parallel workflow에는 `asyncio.gather()`를 고려한다.
+- [ ] sensitive tool에는 HITL approval을 설계한다.
+- [ ] interruption state를 저장·resume하는 책임을 이해한다.
+- [ ] critical business rule은 tool 내부 service에서 재검증한다.
+
+## K. Context와 Reliability
+
+- [ ] `/compact`와 authoritative state를 구분한다.
+- [ ] IDs, 금액, 통화, 날짜, approval을 typed state로 보존한다.
+- [ ] raw logs는 artifact에 두고 model에는 요약을 전달한다.
+- [ ] partial success를 정상 완료로 숨기지 않는다.
+- [ ] transient/validation/permission/business 오류를 구분한다.
+- [ ] side-effect retry에는 idempotency key를 사용한다.
+- [ ] 상충 정보는 두 값을 source와 함께 보존한다.
+
+## L. 최종 암기 문장
+
+```text
+AGENTS.md
+= 항상 지킬 기준
+
+Skill
+= 온디맨드 workflow
+
+Subagent
+= 별도 context의 전문 작업
+
+MCP
+= 외부 tool/data 연결
+
+Hook
+= lifecycle intervention
+
+Rules
+= command policy
+
+Sandbox
+= actual capability
+
+Structured Outputs
+= final schema
+
+Agents SDK
+= application orchestration
+
+Application code
+= critical invariant
+```
+
+
+
+## M. Codex app 전용 점검
+
+- [ ] App은 CLI와 같은 Codex coding agent/configuration을 쓰는 UI layer임을 안다.
+- [ ] CLI 설명을 app에서는 자연어로 실행할 수 있음을 안다.
+- [ ] 여러 project/thread를 병렬 관리할 수 있다.
+- [ ] built-in worktree로 agent별 변경을 격리할 수 있다.
+- [ ] thread 안에서 diff를 review하고 editor로 열 수 있다.
+- [ ] Skill 관리 UI의 역할을 안다.
+- [ ] Automations와 review queue를 사용할 수 있다.
+- [ ] App Automation을 deterministic CI required check와 혼동하지 않는다.
+
+## N. Codex SDK 전용 점검
+
+- [ ] Codex SDK가 CLI를 구동하는 동일 coding agent를 programmatically 제어함을 안다.
+- [ ] Codex SDK와 OpenAI Agents SDK를 구분한다.
+- [ ] TypeScript package가 `@openai/codex-sdk`임을 안다.
+- [ ] Python package가 `openai-codex`이며 2026-08-19 기준 beta임을 안다.
+- [ ] thread start, repeated run, resume의 차이를 안다.
+- [ ] SDK result object와 `finalResponse`/`final_response`를 처리할 수 있다.
+- [ ] sync `Codex`와 async `AsyncCodex`의 용도를 안다.
+- [ ] `Sandbox.read_only`, `workspace_write`, `full_access`를 구분한다.
+- [ ] 여러 coding thread를 `Promise.all()` 또는 `asyncio.gather()`로 병렬 실행할 수 있다.
+- [ ] strict business data extraction은 Codex SDK보다 Responses Structured Outputs가 적합할 수 있음을 안다.
+- [ ] broader multi-agent workflow에서는 Agents SDK가 상위 coordinator가 될 수 있음을 안다.
+
+## O. 네 계층 최종 선택 문제
+
+```text
+개발자가 terminal에서 repository를 수정
+→ Codex CLI
+
+개발자가 desktop에서 여러 agent/worktree를 감독
+→ Codex app
+
+내부 service가 Codex coding thread를 시작·resume
+→ Codex SDK
+
+고객지원·연구·업무 agent와 tools/handoff/HITL
+→ OpenAI Agents SDK
+```
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+- [Agents SDK human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+<!-- CODEX-ADDENDUM-END -->

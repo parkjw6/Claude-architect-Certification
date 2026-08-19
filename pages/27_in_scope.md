@@ -229,3 +229,227 @@ Skills frontmatter:
 ---
 
 > 🔗 다음 챕터: [시험 범위 외 주제](28_out_of_scope.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Codex 실무 학습 범위 재구성
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | Codex 실무 학습의 Level 1 기본입니다. |
+| **Codex app** | CLI 학습 후 parallel thread/worktree/Automations UI를 추가 학습합니다. |
+| **Codex SDK** | Codex를 자체 tool·CI에 embed하는 고급 개발 범위입니다. |
+| **OpenAI Agents SDK** | production agent application 개발 범위입니다. |
+
+Claude 시험 범위와 Codex 실무 범위는 겹치지만 동일하지 않습니다. Codex를 실제로 사용하려면 **네 개의 학습 트랙**과 별도 OpenAI API 기능을 구분합니다.
+
+### Track 1. Codex CLI — repository 사용의 기본
+
+```text
+AGENTS.md
+Skills
+subagents
+MCP
+Hooks
+Rules
+Sandbox
+/plan
+/review
+codex exec
+codex review
+```
+
+완료 기준:
+
+- root/nested `AGENTS.md`를 설명할 수 있음
+- 팀 Skill을 만들 수 있음
+- read-only와 workspace-write를 구분함
+- project/user MCP config를 구분함
+- `--json`과 `--output-schema`를 구분함
+
+### Track 2. Codex app — 사람 중심의 병렬 감독
+
+```text
+projects and threads
+parallel agents
+built-in worktrees
+visual diff and comments
+open in editor
+Skill management UI
+Automations
+review queue
+```
+
+완료 기준:
+
+- CLI와 같은 configuration/session을 공유한다는 점을 설명
+- app-only UI 기능과 CLI 기능을 구분
+- 여러 worktree 결과를 사람이 비교·선택
+- Automation과 deterministic CI gate를 구분
+
+### Track 3. Codex SDK — Codex coding agent를 programmatically embedding
+
+```text
+@openai/codex-sdk
+openai-codex
+thread start/run/resume
+runStreamed / event processing
+outputSchema
+sandbox per thread/turn
+parallel coding threads
+```
+
+완료 기준:
+
+- CLI shell 실행과 SDK embedding을 구분
+- 같은 thread에서 여러 turn을 계속
+- thread ID를 저장해 resume
+- application에서 result object와 event를 처리
+- coding-focused SDK임을 설명
+
+### Track 4. OpenAI Agents SDK — 범용 agent application
+
+```text
+Agent
+Runner
+function tools
+Agent.as_tool
+handoffs
+guardrails
+sessions / RunState
+tracing
+human-in-the-loop
+```
+
+완료 기준:
+
+- customer support/research/business agent를 설계
+- Codex SDK와 Agents SDK의 책임을 구분
+- critical invariant를 application code에 둠
+- manager, handoff, code orchestration을 구분
+- partial success와 typed errors를 처리
+- Codex를 coding specialist로 연결할 시점을 판단
+
+### 별도 OpenAI API 기능
+
+```text
+Responses API
+Function Calling
+Structured Outputs
+Batch API
+Responses Multi-agent
+Compaction
+```
+
+이 API 기능은 CLI/app/SDK/Agents SDK 중 하나의 제품 이름으로 뭉뚱그리지 않습니다.
+
+### Claude 시험 Domain별 네 계층 대응
+
+| Claude Domain | 주요 대응 |
+|---|---|
+| Agentic Architecture | CLI subagents, app threads, Codex SDK threads, Agents SDK orchestration |
+| Tool Design & MCP | Codex MCP와 Agents SDK tool/MCP integration |
+| Claude Code | CLI/app 공통 AGENTS·Skills·Hooks·Rules·Sandbox |
+| Prompt Engineering | Codex prompt/Skill, SDK output schema, Responses Structured Outputs |
+| Context Management | CLI compact/subagent, app threads, SDK thread resume, Agents SDK session/state |
+
+### 시험 범위에는 없지만 Codex 실무에서 필수에 가까운 것
+
+```text
+repository trust
+sandbox boundary
+secret scope
+external RBAC
+idempotency
+audit trail
+CI permissions
+prompt injection from repository content
+MCP OAuth/token scope
+```
+
+Claude 시험 준비와 production engineering의 범위를 혼동하지 않습니다.
+
+
+
+### 네 계층별 최소 학습 목표
+
+#### Codex CLI
+
+```text
+AGENTS.md
+Skills
+subagents
+MCP
+Hooks
+Rules
+Sandbox
+/plan
+/review
+codex exec
+codex review
+```
+
+#### Codex app
+
+```text
+project/thread 관리
+parallel agents
+built-in worktrees
+visual diff/comment
+Skill management UI
+Automations
+review queue
+```
+
+App은 CLI 개념을 대체하는 별도 설정 체계가 아니라 UI layer로 학습합니다.
+
+#### Codex SDK
+
+```text
+TypeScript: @openai/codex-sdk
+Python: openai-codex
+thread start/run/resume
+result object
+sync/async use
+sandbox per thread/turn
+parallel coding threads
+```
+
+#### OpenAI Agents SDK
+
+```text
+Agent / Runner
+function tools
+Agent.as_tool()
+handoffs
+guardrails
+sessions and RunState
+tracing
+HITL
+Codex specialist orchestration
+```
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+- [Codex sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+<!-- CODEX-ADDENDUM-END -->

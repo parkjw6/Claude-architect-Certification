@@ -246,3 +246,189 @@ JSON 구문 오류               → tool_use 사용
 ---
 
 > 🔗 다음 챕터: [최종 체크리스트](31_final_checklist.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Claude 시험과 Codex 실무를 동시에 판단하는 2단계 전략
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | Claude Code syntax를 Codex repository usage로 번역할 때 기본 답입니다. |
+| **Codex app** | CLI와 다른 app-only UI 기능이 선택지의 핵심일 때만 별도로 구분합니다. |
+| **Codex SDK** | 문제에서 'programmatically embed/control Codex'가 나오면 선택합니다. |
+| **OpenAI Agents SDK** | 문제에서 범용 multi-agent app, business tool, handoff, guardrail이 나오면 선택합니다. |
+
+시험에서는 Claude product syntax가 정답입니다. Codex를 사용한다고 해서 시험 선택지를 Codex 파일명으로 바꾸어 답하면 안 됩니다.
+
+### 1. 두 단계로 답한다
+
+```text
+Step 1
+이 문제의 제품은 Claude인가?
+→ 공식 Claude syntax로 정답 선택
+
+Step 2
+Underlying principle은 무엇인가?
+→ Codex 대응을 별도로 기록
+```
+
+예:
+
+```text
+문제: 팀 공유 slash command 위치
+
+Claude 시험 답:
+.claude/commands/
+
+원리:
+version-controlled reusable team workflow
+
+Codex 대응:
+.agents/skills/<name>/SKILL.md
+```
+
+### 2. 네 제품을 먼저 선택하는 결정 트리
+
+```text
+사람이 terminal에서 repository를 직접 수정·검토?
+→ Codex CLI
+
+사람이 desktop UI에서 여러 thread/worktree를 감독?
+→ Codex app
+
+프로그램이 Codex coding thread를 시작·계속·resume?
+→ Codex SDK
+
+고객지원·연구·업무 specialist와 tools/handoff/HITL?
+→ OpenAI Agents SDK
+
+일반 model API의 strict data schema나 batch transport?
+→ Responses API / Structured Outputs / Batch API
+```
+
+그다음 선택한 계층 안에서 `AGENTS.md`, Skill, subagent, MCP, Hook, Rules, Sandbox 같은 세부 기능을 고릅니다.
+
+### 3. Codex CLI 내부 기능 결정 트리
+
+```text
+항상 적용되는 지침인가?
+→ AGENTS.md
+
+특정 workflow인가?
+→ Skill
+
+별도 context가 필요한가?
+→ Subagent
+
+외부 tool/data인가?
+→ MCP
+
+lifecycle event인가?
+→ Hook
+
+shell command 정책인가?
+→ Rules/approval
+
+실제 capability인가?
+→ Sandbox
+
+critical business rule인가?
+→ Application code
+
+정형 최종 출력인가?
+→ Structured Outputs
+
+CI인가?
+→ codex exec / GitHub Action
+```
+
+### 4. 시험에서 특히 혼동할 항목
+
+| Claude 시험 | Codex 실무 |
+|---|---|
+| `.claude/rules/` | Codex `.codex/rules/`와 역할이 다름 |
+| `context: fork` | subagent |
+| `allowed-tools` | sandbox/MCP filter/hooks/rules |
+| `.mcp.json` | `.codex/config.toml` |
+| `Task` | CLI subagent / app thread·worktree / Codex SDK thread / Agents SDK agent-as-tool·handoff |
+| `claude -p` | `codex exec` |
+| `tool_use` JSON | Structured Outputs 또는 Function Calling |
+| terminal에서 직접 coding | Codex CLI |
+| desktop에서 여러 coding task 감독 | Codex app |
+| program에서 Codex coding thread 호출 | Codex SDK |
+| 범용 agent app과 handoff/HITL | OpenAI Agents SDK |
+
+### 5. “가장 직접적인 해결책” 원칙
+
+제품이 바뀌어도 다음은 유지됩니다.
+
+```text
+순서·금액·권한 invariant
+→ code
+
+tool 선택 오류
+→ description과 tool surface
+
+판정 경계 불명확
+→ explicit criteria + examples
+
+context pollution
+→ isolation + summary
+
+schema 오류
+→ API-level structured output
+
+source conflict
+→ provenance 보존
+```
+
+### 6. Codex 실무에서는 security layer까지 확인
+
+시험 정답이 prompt나 Hook이어도 production에서는 다음 질문을 추가합니다.
+
+```text
+Sandbox가 실제로 막는가?
+External token이 read-only인가?
+DB/API가 authorization을 재검증하는가?
+Operation은 idempotent한가?
+Audit trail이 남는가?
+```
+
+### 7. 최신 문서 확인 대상
+
+Codex는 빠르게 변하므로 다음은 시험 암기보다 공식 문서 재확인이 중요합니다.
+
+- slash command 이름
+- custom agent fields
+- Hooks event/schema
+- Rules maturity
+- supported model
+- Responses Multi-agent beta
+- MCP approval options
+- GitHub Action inputs
+
+이 저장소의 Codex 절에는 기준일을 넣은 이유가 여기에 있습니다.
+
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Hooks](https://developers.openai.com/codex/hooks)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+- [Codex non-interactive mode](https://developers.openai.com/codex/non-interactive-mode)
+- [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

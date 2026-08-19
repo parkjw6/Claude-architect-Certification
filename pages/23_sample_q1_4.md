@@ -155,3 +155,167 @@ D) `commands` 배열이 있는 `.claude/config.json` 파일
 ---
 
 > 🔗 다음 챕터: [샘플 문제 해설 Q5~Q8](24_sample_q5_8.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: Q1~Q4를 Codex/OpenAI 문제로 번역하기
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | Q4의 team command 대응을 Skill과 `/review`로 번역합니다. |
+| **Codex app** | 같은 Skill을 UI에서 선택·실행할 수 있으며 별도 syntax를 외울 필요는 없습니다. |
+| **Codex SDK** | 반복 review workflow를 내부 tool에서 coding thread로 실행할 때 사용합니다. |
+| **OpenAI Agents SDK** | Q1~Q3의 production customer-support/tool orchestration을 구현합니다. |
+
+기존 정답은 **Claude Certified Architect 시험 기준**으로 유지합니다. 아래는 같은 원리를 Codex/OpenAI 실무 문제로 바꿨을 때의 대응입니다.
+
+### Q1. 고객 확인 전 주문·환불 차단
+
+| 항목 | Claude 원문 | Codex/OpenAI 대응 |
+|---|---|---|
+| 핵심 원리 | 프로그래밍적 전제조건 | 동일 |
+| 구현 위치 | tool 실행 wrapper/hook | application service, authorization layer |
+| Codex 역할 | 해당 시스템 코드 생성·검토 | production gate runtime이 아님 |
+
+```python
+def lookup_order(
+    *,
+    verified_customer_id: str | None,
+    requested_customer_id: str,
+    order_id: str,
+) -> dict:
+    if verified_customer_id is None:
+        raise PermissionError("Verification required")
+
+    if verified_customer_id != requested_customer_id:
+        raise PermissionError("Customer mismatch")
+
+    return order_repository.get(order_id)
+```
+
+Codex의 `AGENTS.md`에 “고객 확인 후 조회”라고 적는 것은 개발 지침일 뿐, runtime 보장이 아닙니다.
+
+### Q2. 잘못된 tool 선택
+
+첫 번째 단계가 tool description 개선이라는 원리는 동일합니다.
+
+```text
+❌ get_user
+   "사용자 정보를 가져옵니다."
+
+✅ get_customer_by_email
+   "정확한 email로 고객 계정 하나를 조회합니다.
+   주문 조회에는 사용하지 않습니다.
+   결과가 없으면 not_found,
+   여러 건이면 ambiguous_match를 반환합니다.
+   Read-only tool입니다."
+```
+
+Codex MCP에서도 tool 이름, description, input schema가 선택 신호입니다. 추가로 `enabled_tools`로 현재 agent가 볼 tool surface를 줄일 수 있습니다.
+
+```toml
+[mcp_servers.customer_tools]
+enabled_tools = [
+  "get_customer_by_email",
+  "lookup_order_by_id",
+]
+```
+
+### Q3. Escalation 조정
+
+명시적 기준 + boundary example은 동일하게 유효합니다. 다만 monetary threshold나 policy gap처럼 객관적으로 계산 가능한 조건은 코드가 우선합니다.
+
+```python
+def should_escalate(case: dict) -> bool:
+    return (
+        case["explicit_human_request"]
+        or case["policy_match"] is None
+        or case["refund_amount"] > 500
+        or (
+            case["attempt_count"] >= 3
+            and not case["progress_made"]
+        )
+    )
+```
+
+Agents SDK에서 민감한 tool은 `needs_approval=True`로 HITL interruption을 만들 수 있습니다.
+
+### Q4. 팀 공유 `/review`
+
+Claude 시험 정답:
+
+```text
+.claude/commands/review.md
+```
+
+Codex에서의 권장 대응:
+
+```text
+.agents/skills/team-review/SKILL.md
+```
+
+```markdown
+---
+name: team-review
+description: >
+  Review current changes using the team's standard checklist.
+---
+
+# Team review
+
+Do not edit files.
+
+Report:
+- severity
+- file and line
+- evidence
+- impact
+- recommended fix
+```
+
+사용:
+
+```text
+$team-review
+```
+
+일반적인 code review는 Codex built-in을 사용합니다.
+
+```text
+/review
+```
+
+```bash
+codex review --uncommitted
+```
+
+### 시험과 실무를 동시에 기억하는 방법
+
+```text
+Claude 시험:
+팀 command → .claude/commands/
+
+Codex 실무:
+팀 workflow → .agents/skills/
+일반 review → /review 또는 codex review
+```
+
+
+### 공식 문서
+
+- [Codex MCP](https://developers.openai.com/codex/mcp)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+- [Codex slash commands](https://developers.openai.com/codex/cli/slash-commands)
+- [Agents SDK human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

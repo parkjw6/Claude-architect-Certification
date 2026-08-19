@@ -199,3 +199,104 @@ Total: $1,500.00
 ---
 
 > 🔗 다음 챕터: [구조화된 출력 설계](13_structured_output.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: 프롬프트 엔지니어링 원칙과 Codex 지침 계층
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | `AGENTS.md`, Skill, 현재 prompt에 목표·제약·완료 조건을 배치하는 기본 사용 계층입니다. |
+| **Codex app** | CLI와 같은 Codex coding agent와 repository 설정을 데스크톱 UI에서 사용합니다. 이 장에는 별도 app-only 동작이 없으므로 CLI 설명을 자연어로 실행하면 됩니다. |
+| **Codex SDK** | 반복되는 coding prompt를 `thread.run()`으로 호출하고 같은 thread를 이어갈 때 사용합니다. |
+| **OpenAI Agents SDK** | 일반 agent application의 `instructions`, tool description, guardrail 기준을 설계할 때 사용합니다. |
+
+> **별도 OpenAI API 계층:** 직접 model call의 prompt를 제어할 때 Responses API가 보조 계층입니다.
+
+### 1. 원리는 동일하지만 저장 위치가 달라진다
+
+명시적 기준, negative examples, few-shot 같은 프롬프트 원칙은 Claude와 Codex에 동일하게 적용됩니다. 차이는 **지침을 어디에 두는가**입니다.
+
+| 지속 범위 | Codex 위치 | 예 |
+|---|---|---|
+| 이번 요청에만 적용 | 현재 사용자 prompt | 특정 버그의 acceptance criteria |
+| 저장소 전체에 항상 적용 | `AGENTS.md` | 테스트·보안·변경 범위 원칙 |
+| 특정 하위 시스템에 적용 | nested `AGENTS.md` | backend transaction 규칙 |
+| 특정 작업에서만 적용 | `.agents/skills/<name>/SKILL.md` | PR review, 배포 점검 |
+| 실제로 위반하면 안 되는 규칙 | application code / sandbox / RBAC | 환불 한도, production 권한 |
+
+모든 내용을 root `AGENTS.md`에 넣으면 항상 context를 차지합니다. 반복 가능하지만 특정 작업에서만 필요한 세부 절차는 Skill로 분리하는 편이 낫습니다.
+
+### 2. Codex용 작업 요청 템플릿
+
+```text
+Goal:
+JWT refresh token 만료 처리 버그를 수정한다.
+
+Context:
+- 구현: backend/auth/
+- token state: Redis
+- API contract는 공개되어 있다.
+
+Constraints:
+- public response schema 변경 금지
+- dependency 추가 금지
+- unrelated refactor 금지
+
+Done when:
+- expired refresh token은 401
+- valid refresh token은 access token 재발급
+- 관련 unit/integration test 통과
+- 실행하지 못한 검증은 이유와 함께 보고
+```
+
+이 형식은 모델에게 “무엇을 할지”뿐 아니라 **변경 경계와 완료 판정 기준**을 제공합니다.
+
+### 3. 모호한 평가를 명시적 판정으로 전환
+
+```text
+❌ 정확한 문제만 보고하라.
+
+✅ 다음 조건을 모두 만족할 때만 finding으로 보고하라.
+1. 변경된 코드로 도달 가능한 실행 경로가 있다.
+2. 재현 가능한 입력 또는 상태가 있다.
+3. 관찰 가능한 잘못된 결과가 있다.
+4. 파일과 줄, 근거를 제시할 수 있다.
+
+다음은 보고하지 않는다.
+- 근거 없는 가능성
+- 코드베이스에 이미 확립된 스타일
+- 측정 없는 미세 성능 제안
+```
+
+### 4. 중요한 구분
+
+`AGENTS.md`에 “production에 배포하지 마라”라고 쓰는 것은 행동 지침입니다. 실제 차단이 필요하면 Codex Hook, Rules, Sandbox, 배포 API 권한까지 내려가야 합니다.
+
+```text
+prompt / AGENTS.md
+→ 행동 유도
+
+Hook / Rules
+→ tool·command 검사
+
+Sandbox / external RBAC
+→ 실제 capability 제한
+```
+
+
+### 공식 문서
+
+- [AGENTS.md](https://developers.openai.com/codex/agent-configuration/agents-md)
+- [Codex Skills](https://developers.openai.com/codex/build-skills)
+
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

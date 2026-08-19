@@ -106,3 +106,136 @@ def escalate(customer_id: str, reason: str, context: dict) -> dict:
 ---
 
 > 🔗 다음: [16.2 에러 전파 전략](16_2_error_propagation.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: 명시적 escalation engine과 구조화 handoff
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | remote write나 위험 command의 approval 정책에 적용합니다. |
+| **Codex app** | 사람이 승인·diff를 시각적으로 검토하는 UI를 제공합니다. Business escalation engine은 app 기능이 아닙니다. |
+| **Codex SDK** | coding action의 sandbox/turn policy를 programmatically 설정합니다. |
+| **OpenAI Agents SDK** | 고객지원·운영 escalation signal과 structured handoff를 구현합니다. |
+
+### 1. Model 판단과 policy engine을 분리
+
+모델은 사용자의 표현에서 signal을 추출할 수 있지만 최종 routing 기준은 코드가 소유하는 편이 안정적입니다.
+
+```python
+from typing import Literal
+from pydantic import BaseModel
+
+
+class EscalationSignals(BaseModel):
+    explicit_human_request: bool
+    legal_or_regulatory_issue: bool
+    policy_gap: bool
+    attempts: int
+    progress_made: bool
+    refund_amount: float | None
+
+
+class EscalationDecision(BaseModel):
+    should_escalate: bool
+    reason: Literal[
+        "explicit_request",
+        "legal_issue",
+        "policy_gap",
+        "no_progress",
+        "approval_threshold",
+        "none",
+    ]
+
+
+def decide_escalation(
+    signals: EscalationSignals,
+) -> EscalationDecision:
+    if signals.explicit_human_request:
+        return EscalationDecision(
+            should_escalate=True,
+            reason="explicit_request",
+        )
+
+    if signals.legal_or_regulatory_issue:
+        return EscalationDecision(
+            should_escalate=True,
+            reason="legal_issue",
+        )
+
+    if signals.policy_gap:
+        return EscalationDecision(
+            should_escalate=True,
+            reason="policy_gap",
+        )
+
+    if signals.attempts >= 3 and not signals.progress_made:
+        return EscalationDecision(
+            should_escalate=True,
+            reason="no_progress",
+        )
+
+    if (
+        signals.refund_amount is not None
+        and signals.refund_amount > 500
+    ):
+        return EscalationDecision(
+            should_escalate=True,
+            reason="approval_threshold",
+        )
+
+    return EscalationDecision(
+        should_escalate=False,
+        reason="none",
+    )
+```
+
+### 2. Handoff schema
+
+```python
+class Handoff(BaseModel):
+    customer_id: str
+    verified: bool
+    order_ids: list[str]
+    issue_summary: str
+    exact_amounts: list[str]
+    attempted_actions: list[str]
+    completed_side_effects: list[str]
+    pending_side_effects: list[str]
+    escalation_reason: str
+    policy_version: str
+    source_refs: list[str]
+```
+
+Handoff를 prose 한 문단으로만 만들면 ID·금액·상태가 누락되기 쉽습니다.
+
+### 3. Codex에서 “승인”이 필요한 coding action
+
+예를 들어 `git push`는 Rules에서 prompt로 분류할 수 있습니다.
+
+```python
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Remote writes require approval.",
+)
+```
+
+하지만 이 command rule은 고객지원 escalation engine의 대체물이 아닙니다. 서로 다른 runtime과 책임 영역입니다.
+
+
+### 공식 문서
+
+- [Agents SDK human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+- [Codex Rules](https://developers.openai.com/codex/rules)
+
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+<!-- CODEX-ADDENDUM-END -->

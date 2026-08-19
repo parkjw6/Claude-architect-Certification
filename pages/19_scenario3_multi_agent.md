@@ -323,3 +323,416 @@ D) 병렬 실행 중 레이스 컨디션
 ---
 
 > 🔗 다음 챕터: [시나리오 4 — 개발자 생산성 도구](20_scenario4_developer_productivity.md)
+
+<!-- CODEX-ADDENDUM-START -->
+
+---
+
+## Codex/OpenAI 대응: CLI·app·Codex SDK·Agents SDK의 병렬 작업 비교
+
+> 기준일: **2026-08-19**  
+> 이 절은 앞의 Claude 원문을 변경하지 않고, 동일한 원리를 Codex와 OpenAI 플랫폼에서 적용하는 방법만 추가합니다.  
+> **Codex CLI / Codex app / Codex SDK / OpenAI Agents SDK**를 서로 다른 계층으로 구분합니다. 별도 데이터·모델 기능은 OpenAI API 계층으로 표시합니다.
+
+### 이 장에서 구분할 네 계층
+
+| 계층 | 이 장에서의 역할 |
+|---|---|
+| **Codex CLI** | repository 작업은 native subagent/custom agent로 분해합니다. |
+| **Codex app** | 여러 agent thread와 worktree를 command-center UI에서 병렬 감독하는 것이 가장 큰 app 전용 장점입니다. |
+| **Codex SDK** | 여러 Codex coding thread를 `Promise.all`/`asyncio.gather`로 programmatically 병렬 실행합니다. |
+| **OpenAI Agents SDK** | 범용 multi-agent research/business system의 manager, handoff, tools, synthesis를 구현합니다. |
+
+> **별도 OpenAI API 계층:** Responses Multi-agent beta는 별도 model-directed API 경로입니다.
+
+### 1. 먼저 실행 주체를 구분한다
+
+| 실행 주체와 목적 | 권장 방식 |
+|---|---|
+| 개발자가 terminal에서 repository 작업을 분해 | **Codex CLI native subagents** |
+| 개발자가 여러 coding task를 화면에서 감독 | **Codex app의 project/thread/worktree UI** |
+| 프로그램이 여러 coding-focused Codex 작업을 실행 | **Codex SDK의 여러 thread** |
+| 범용 연구·고객지원·업무 specialist를 조율 | **OpenAI Agents SDK** |
+| 한 Responses API 요청에서 모델 주도 subagent 분해 | **Responses Multi-agent beta** |
+| 정해진 N개 작업을 반드시 실행 | SDK/application code의 `Promise.all()`·`asyncio.gather()` |
+
+Claude의 `allowedTools=["Task"]`를 어느 OpenAI 계층에도 그대로 복사하지 않습니다.
+
+```text
+Codex CLI
+→ native subagent/custom agent
+
+Codex app
+→ CLI와 같은 Codex agent를 별도 thread/worktree에서 시각적으로 관리
+
+Codex SDK
+→ 여러 Codex thread를 code로 start/run/resume
+
+OpenAI Agents SDK
+→ 서로 다른 역할, tool, handoff, guardrail을 가진 범용 agent orchestration
+```
+
+### 2. Codex CLI — native subagents
+
+사용자 요청 예시:
+
+```text
+현재 변경사항을 세 관점에서 병렬 검토해.
+
+- security reviewer: exploit 가능한 취약점
+- correctness reviewer: 동작 오류와 regression
+- test reviewer: 누락된 test
+
+각 작업을 별도 subagent에 위임하고,
+모두 완료된 뒤 중복을 제거해 severity 순으로 정리해.
+```
+
+Project config:
+
+```toml
+[agents]
+max_concurrent_threads_per_session = 6
+```
+
+Custom agent:
+
+```toml
+# .codex/agents/security-reviewer.toml
+
+name = "security_reviewer"
+description = "Read-only reviewer for exploitable security risks."
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Report only reachable, evidence-backed vulnerabilities.
+Do not edit files.
+Include file, line, attack path, impact, and fix.
+"""
+```
+
+Subagent는 별도 context를 사용합니다. Main agent의 전체 conversation을 자동으로 안다고 가정하지 말고 task에 필요한 목표·범위·제약·출력 형식을 전달합니다.
+
+### 3. Codex app — parallel threads와 worktrees
+
+Codex app은 CLI와 같은 coding agent를 사용하지만, **사람이 여러 작업을 동시에 감독하는 UI**에 강점이 있습니다.
+
+```text
+Project
+├─ Thread A / worktree A: security review
+├─ Thread B / worktree B: correctness review
+└─ Thread C / worktree C: missing-test review
+```
+
+App에서 별도로 가능한 일:
+
+- agent를 project별 별도 thread로 유지
+- built-in worktree로 같은 repository의 변경 충돌 격리
+- 각 thread의 진행 상태를 전환하며 감독
+- diff에 comment
+- 결과를 editor로 열기
+- 여러 장기 작업을 review queue에서 확인
+
+이는 다음과 다릅니다.
+
+```text
+App parallel UI
+= 사람이 여러 Codex thread를 시각적으로 감독
+
+Codex SDK parallel threads
+= program이 여러 Codex thread를 실행
+
+Agents SDK multi-agent
+= 범용 agent 역할과 tool/handoff를 orchestration
+```
+
+### 4. 별도 API 경로 — Responses Multi-agent beta
+
+API 요청 하나 안에서 root model이 subagent를 만들도록 할 수 있습니다.
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+response = client.beta.responses.create(
+    model="gpt-5.6-sol",
+    input="""
+Analyze the supplied material using three independent subagents:
+
+1. market structure
+2. competitors
+3. regulation
+
+Each subagent must return claims with sources.
+Reconcile conflicts and preserve unresolved differences.
+""",
+    multi_agent={
+        "enabled": True,
+        "max_concurrent_subagents": 3,
+    },
+    betas=["responses_multi_agent=v1"],
+)
+
+print(response.output_text)
+```
+
+이 기능은 beta이므로 API shape와 지원 model을 공식 문서에서 재확인해야 합니다.
+
+적합:
+
+```text
+bounded independent research
+parallel document comparison
+independent codebase exploration
+```
+
+부적합:
+
+```text
+여러 agent가 같은 mutable file을 동시 수정
+고정된 deterministic graph가 반드시 필요
+정확히 N개 단계의 실행 보장이 필요
+```
+
+### 5. OpenAI Agents SDK — manager가 agent를 tool처럼 사용
+
+```python
+from agents import Agent, Runner
+
+market_agent = Agent(
+    name="market_agent",
+    instructions="Analyze market size, segments, and trends.",
+)
+
+competitor_agent = Agent(
+    name="competitor_agent",
+    instructions="Analyze competitors and differentiation.",
+)
+
+regulation_agent = Agent(
+    name="regulation_agent",
+    instructions="Analyze current and pending regulation.",
+)
+
+coordinator = Agent(
+    name="research_coordinator",
+    instructions="""
+Decompose the request.
+Call only relevant specialist tools.
+When tasks are independent, call them in the same turn.
+Preserve source attribution and unresolved conflicts.
+""",
+    tools=[
+        market_agent.as_tool(
+            tool_name="market_research",
+            tool_description="Research market structure and trends.",
+        ),
+        competitor_agent.as_tool(
+            tool_name="competitor_research",
+            tool_description="Research competitors.",
+        ),
+        regulation_agent.as_tool(
+            tool_name="regulation_research",
+            tool_description="Research regulation.",
+        ),
+    ],
+)
+
+result = await Runner.run(
+    coordinator,
+    "Research the electric vehicle supply chain.",
+)
+```
+
+`Agent.as_tool()`의 nested run은 parent conversation state를 자동 상속한다고 가정하지 않습니다. 필요한 context를 tool input이나 shared session/context로 명시적으로 설계합니다.
+
+### 6. Agents SDK에서 모든 specialist를 반드시 실행할 때
+
+```python
+import asyncio
+from agents import Runner
+
+
+async def run_fixed_research(topic: str):
+    market, competitors, regulation = await asyncio.gather(
+        Runner.run(
+            market_agent,
+            f"Topic: {topic}\nAnalyze the market.",
+        ),
+        Runner.run(
+            competitor_agent,
+            f"Topic: {topic}\nAnalyze competitors.",
+        ),
+        Runner.run(
+            regulation_agent,
+            f"Topic: {topic}\nAnalyze regulation.",
+        ),
+    )
+
+    return {
+        "market": market.final_output,
+        "competitors": competitors.final_output,
+        "regulation": regulation.final_output,
+    }
+```
+
+```text
+parallel_tool_calls를 허용
+= 모델이 여러 call을 낼 수 있음
+
+asyncio.gather로 N개 run 생성
+= code가 N개 실행을 보장
+```
+
+### 7. Context contract
+
+각 subagent task에는 최소한 다음을 포함합니다.
+
+```json
+{
+  "project_goal": "global semiconductor supply-chain analysis",
+  "assigned_scope": "Southeast Asia manufacturing",
+  "excluded_scope": ["US fab policy", "EU subsidies"],
+  "time_cutoff": "2026-08-19",
+  "required_output": {
+    "claims": "with source and date",
+    "conflicts": "preserve all values",
+    "unknowns": "explicit list"
+  }
+}
+```
+
+### 8. Synthesis는 단순 연결이 아니다
+
+Coordinator는 다음을 수행합니다.
+
+- 중복 claim 병합
+- 동일 용어의 정의 차이 확인
+- 상충 수치 보존
+- source quality와 날짜 비교
+- 누락된 scope 확인
+- final recommendation과 evidence 분리
+
+분해 전에 coverage matrix를 만들면 특정 지역이나 관점을 통째로 빠뜨리는 문제를 줄일 수 있습니다.
+
+
+
+### Codex SDK로 여러 coding thread를 병렬 실행
+
+Codex SDK는 범용 agent role framework가 아니라 **동일한 Codex coding agent의 여러 thread를 programmatically 관리**하는 데 적합합니다.
+
+#### TypeScript
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+
+const codex = new Codex();
+
+const securityThread = codex.startThread();
+const correctnessThread = codex.startThread();
+const testThread = codex.startThread();
+
+const [security, correctness, tests] = await Promise.all([
+  securityThread.run(
+    "Review the current branch for exploitable security issues. Do not edit."
+  ),
+  correctnessThread.run(
+    "Review the current branch for correctness regressions. Do not edit."
+  ),
+  testThread.run(
+    "Review the current branch for missing tests. Do not edit."
+  ),
+]);
+
+const results = {
+  security: security.finalResponse,
+  correctness: correctness.finalResponse,
+  tests: tests.finalResponse,
+};
+
+console.log(results);
+```
+
+#### Python
+
+```python
+import asyncio
+
+from openai_codex import AsyncCodex, Sandbox
+
+
+async def main() -> None:
+    async with AsyncCodex() as codex:
+        security_thread = await codex.thread_start(
+            sandbox=Sandbox.read_only,
+        )
+        test_thread = await codex.thread_start(
+            sandbox=Sandbox.read_only,
+        )
+
+        security, tests = await asyncio.gather(
+            security_thread.run(
+                "Review security risks in the current branch"
+            ),
+            test_thread.run(
+                "Review missing tests in the current branch"
+            ),
+        )
+
+        print(security.final_response)
+        print(tests.final_response)
+
+
+asyncio.run(main())
+```
+
+### Codex SDK와 Agents SDK의 병렬화 차이
+
+```text
+Codex SDK
+→ 여러 coding-focused Codex thread
+→ 모두 repository 작업자
+→ start/run/resume와 sandbox 중심
+
+OpenAI Agents SDK
+→ 서로 다른 역할의 범용 agent
+→ market, regulation, customer support, coding specialist 등
+→ tools, handoffs, guardrails, HITL, tracing 중심
+```
+
+예:
+
+```text
+PR security/correctness/test review
+→ Codex SDK 여러 thread가 자연스러울 수 있음
+
+시장·경쟁사·규제 연구
+→ OpenAI Agents SDK가 더 자연스러움
+
+연구 coordinator가 patch까지 필요
+→ Agents SDK manager + Codex coding specialist
+```
+
+### Codex app에서의 병렬화
+
+App은 위의 여러 coding thread를 사람이 시각적으로 감독할 때 가장 편리합니다.
+
+- 각 thread를 project 안에서 유지
+- worktree로 file 충돌 격리
+- 진행 상태 전환
+- diff 비교
+- 더 나은 결과를 선택해 local state로 가져오기
+
+App의 병렬 UI는 SDK의 programmatic `Promise.all()`이나 Agents SDK orchestration과 같은 개념이 아닙니다.
+
+### 공식 문서
+
+- [Codex subagents](https://developers.openai.com/codex/subagents)
+- [Responses Multi-agent](https://developers.openai.com/api/docs/guides/responses-multi-agent)
+- [Agents SDK tools and agents-as-tools](https://openai.github.io/openai-agents-python/tools/)
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [Codex app 발표](https://openai.com/index/introducing-the-codex-app/)
+- [Codex desktop app 문서](https://developers.openai.com/codex/app)
+<!-- CODEX-ADDENDUM-END -->
