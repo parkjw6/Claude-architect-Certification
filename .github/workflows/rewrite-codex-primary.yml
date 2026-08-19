@@ -1,0 +1,55 @@
+name: Rewrite handbook as Codex-first
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/rewrite_codex_primary.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rewrite-codex-primary
+  cancel-in-progress: false
+
+jobs:
+  rewrite:
+    if: ${{ !contains(github.event.head_commit.message, '[skip codex rewrite]') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rewrite every Markdown page
+        run: python scripts/rewrite_codex_primary.py
+
+      - name: Validate changed scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find pages -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')" = "88"
+          grep -R --include='*.md' -L 'Codex가 main' pages && exit 1 || true
+          grep -R --include='*.md' -L '## Claude Code / Anthropic 보충 설명' pages && exit 1 || true
+
+      - name: Commit directly to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md TOC.md main_intro.md pages
+          if git diff --cached --quiet; then
+            echo "No documentation changes."
+            exit 0
+          fi
+          git commit -m "docs: make Codex primary across all pages [skip codex rewrite]"
+          git push origin HEAD:main
